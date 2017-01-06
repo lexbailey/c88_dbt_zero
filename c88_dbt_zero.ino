@@ -72,6 +72,9 @@ int thumb_offsets[8] = {0,0,0,0,0,0,0,0};
 //uint16_t translated_program[100];
 uint16_t *translated_program;
 
+// Offset into the translated program that represents where the C88 PC is now
+uint32_t translated_pc_offset = 0;
+
 bool isRun = false;
 
 const int C88_CONFIG_SPEED_SLOW = 1;
@@ -107,9 +110,14 @@ extern "C"{
       uint32_t R0 = svc_args[0];
       uint32_t R1 = svc_args[1];
       uint32_t R2 = svc_args[2];
+      uint32_t PC = svc_args[6];
       Serial.print("Supervisor: R0: 0x"); Serial.println(R0, HEX);
       Serial.print("Supervisor: R1: 0x"); Serial.println(R1, HEX);
       Serial.print("Supervisor: R2: 0x"); Serial.println(R2, HEX);
+      Serial.print("Supervisor: PC: 0x"); Serial.println(PC, HEX);
+
+      translated_pc_offset = (uint32_t)((uint16_t *)PC - translated_program);
+      
       svc_args[6] = R2;
       
       //delay(300);
@@ -247,8 +255,7 @@ void translate(){
       // Lookup the offset to the target instruction and do some maths
       int targetOffset = thumb_offsets[thisC88Operand];
       int relativeJump = targetOffset - curThumbOffset;
-      thisThumbInstr = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
       curThumbOffset += 2;
     }
     // For debugging (slower run speeds) insert supervisor calls after each instruction.
@@ -295,7 +302,8 @@ volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, 
   // This function also copies the return address from the stack into r2
   // so that the supervisor can reliably find the return address.
   asm(
-    "  mov  r2, lr   \n"
+    "  mov  r3, r2   \n" // r3 <= target
+    "  mov  r2, lr   \n" // r2 <= lr (return address for DBT)
     "  mov  r4, #1   \n" // r4 <= 1
     "  orr  r3, r4   \n" // r3 <= target | 1 (r3 is the target with the thumb bit set)
     "  blx  r3       \n" // A return from this call happens for stop instructions
@@ -311,12 +319,13 @@ volatile void dbt_loop(){
   Serial.println("Translated program:");
   showTranslatedProgram();
   Serial.println("Running program");
-  Serial.println((uint32_t)translated_program, HEX);
   volatile uint32_t R0 = c88_reg;
   volatile uint32_t R1 = 0;
+  uint16_t *target = translated_program + translated_pc_offset;
+  Serial.println((uint32_t)target, HEX);
   // This function will call the translated program after setting the registers
-  call_translated_program(R0, R1, translated_program);
-  exit(1);
+  call_translated_program(R0, R1, target);
+  //exit(1);
   asm("":::"lr");// does this work? if so why?
   // Now we need to extract the R0 and R1 values before anything else has a chance to
   // clobber them. This is probably safe, as nothing should happen after the translated
@@ -334,12 +343,10 @@ volatile void dbt_loop(){
   Serial.println("Continue DBT.");
   Serial.print("R0: "); Serial.println(R0);
   Serial.print("R1: "); Serial.println(R1);
-  //delay(300);
-  exit(1);
+  delay(1000);
+  //exit(1);
 }
 
-// the loop function runs over and over again forever
 void loop() {
   dbt_loop();
-  
 }
