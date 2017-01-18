@@ -47,9 +47,6 @@
 #define CFSR_ADDR     ((uint32_t *)0xE000ED28)
 #define CFSR          (*CFSR_ADDR)
 
-#define INTERRUPT_VECTOR_SYSTICK (15)
-#define REGISTER_VTOR_ADDRESS (0xE000ED08)
-
 #define MAX_TRANSLATED_LENGTH (100)
 
 #define SVC_NUMBER(x) (x)
@@ -62,7 +59,7 @@
 bool supervisorTestComplete = false;
 
 // The program provided by the user (C88)
-uint8_t  user_program[8] = {0,0,0,0,0,0,0,0};
+volatile uint8_t user_program[8] = {0,0,0,0,0,0,0,0};
 
 // Offsets into thumb program for start of each c88 instruction.
 // These offsets are specified in bytes.
@@ -70,7 +67,7 @@ int thumb_offsets[8] = {0,0,0,0,0,0,0,0};
 
 // The translated program (thumb)
 //uint16_t translated_program[100];
-uint16_t *translated_program;
+volatile uint16_t *translated_program;
 
 // Offset into the translated program that represents where the C88 PC is now
 uint32_t translated_pc_offset = 0;
@@ -124,9 +121,6 @@ extern "C"{
       return;
       exit(1);
     }
-
-    //uint16_t mysvc = ((uint16_t *)svc_args[6])[-1];
-    //Serial.println(mysvc, HEX);
   }
 }
 
@@ -210,8 +204,16 @@ void setup() {
   
   isRun = false;
   user_program[0] = 0b11100000;
-  //user_program[1] = 0b11100000;
-  user_program[1] = 0b01000000;
+  user_program[1] = 0b11101000;
+  user_program[2] = 0b01000000;
+  //user_program[3] = 0b11100000;
+  //user_program[4] = 0b01000000;
+
+  Serial.println("Translate...");
+  translate();
+  Serial.println("Translated program:");
+  showTranslatedProgram();
+  
   runSpeed = C88_CONFIG_SPEED_SLOW;
   isRun = true;
 }
@@ -244,7 +246,14 @@ void translate(){
     if (thisC88Instr == C88_INC){
       Serial.println("INC");
       // INC | Increment register
-      thisThumbInstr = encode_thumb_16(THUMB_ADD_imm_1, ARM_R0, ARM_R0, 1); // R0 <= R0 + 1
+      thisThumbInstr = encode_thumb_16(THUMB_ADD_imm_2, ARM_R0, 1); // R0 <= R0 + 1
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+    }
+    if (thisC88Instr == C88_DEC){
+      Serial.println("DEC");
+      // DEC | Decrement register
+      thisThumbInstr = encode_thumb_16(THUMB_SUB_imm_2, ARM_R0, 1); // R0 <= R0 - 1
       translated_program[curThumbOffset>>1] = thisThumbInstr;
       curThumbOffset += 2;
     }
@@ -253,7 +262,7 @@ void translate(){
       // JMP a | Jump to address a.
       // All jumps on the C88 are absolute, thumb branches are relative.
       // Lookup the offset to the target instruction and do some maths
-      int targetOffset = thumb_offsets[thisC88Operand];
+      int targetOffset = thumb_offsets[thisC88Operand]; // TODO this won't work for forward jumps
       int relativeJump = targetOffset - curThumbOffset;
       translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
       curThumbOffset += 2;
@@ -273,13 +282,7 @@ void translate(){
   Serial.println("t-B (loop to zero)");
   translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
   curThumbOffset += 2;
-/*
-  for (int i = 0; i<= MAX_TRANSLATED_LENGTH-1; i+=2){
-    uint16_t tmp = translated_program[i+1];
-    translated_program[i+1] = translated_program[i];
-    translated_program[i] = tmp;
-  }
-  */
+
 }
 
 void showTranslatedProgram(){
@@ -294,8 +297,8 @@ void showTranslatedProgram(){
 // This function will call an array as if it is a function.
 // Three parameters can be passed to the function. If the called function
 // returns normally, so too will this function.
-volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, uint32_t R1in, void *target) __attribute__ ((naked));
-volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, uint32_t R1in, void *target){
+volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, uint32_t R1in, volatile void *target) __attribute__ ((naked));
+volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, uint32_t R1in, volatile void *target){
   // Use BLX to call the target code
   // when using BLX, the LSB indicates the instruction set state.
   // This bit must be 1 to indicate that we should use thumb state.
@@ -314,19 +317,17 @@ volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, 
 uint32_t c88_reg = 0;
 
 volatile void dbt_loop(){
-  Serial.println("Translate...");
-  translate();
-  Serial.println("Translated program:");
-  showTranslatedProgram();
+  //Serial.println("Translated program:");
+  //showTranslatedProgram();
   Serial.println("Running program");
   volatile uint32_t R0 = c88_reg;
   volatile uint32_t R1 = 0;
-  uint16_t *target = translated_program + translated_pc_offset;
+  volatile uint16_t *target = translated_program + translated_pc_offset;
   Serial.println((uint32_t)target, HEX);
   // This function will call the translated program after setting the registers
   call_translated_program(R0, R1, target);
   //exit(1);
-  asm("":::"lr");// does this work? if so why?
+  asm("":::"lr", "r2", "r3", "r4");// does this work? if so why?
   // Now we need to extract the R0 and R1 values before anything else has a chance to
   // clobber them. This is probably safe, as nothing should happen after the translated
   // program returns before we do this.
@@ -344,9 +345,14 @@ volatile void dbt_loop(){
   Serial.print("R0: "); Serial.println(R0);
   Serial.print("R1: "); Serial.println(R1);
   delay(1000);
-  //exit(1);
+
+  if (c88_reg > 256){
+    exit(1);
+  }
 }
 
 void loop() {
+  Serial.print("Before: "); Serial.println(c88_reg);
   dbt_loop();
+  Serial.print("After: "); Serial.println(c88_reg);
 }

@@ -50,6 +50,11 @@ const uint16_t  THUMB_ADD_imm_1_masks[]  = {0b0000000000000111, 0b00000000001110
 const int       THUMB_ADD_imm_1_shifts[] = {                 0,               3   ,            6      };
 const THUMB16_t THUMB_ADD_imm_1          = {0b0001110000000000, 3, THUMB_ADD_imm_1_masks, THUMB_ADD_imm_1_shifts};
 
+const uint16_t  THUMB_ADD_SUB_imm_2_masks[]  = {0b0000011100000000, 0b0000000011111111};
+const int       THUMB_ADD_SUB_imm_2_shifts[] = {         8        ,                  0};
+const THUMB16_t THUMB_ADD_imm_2          = {0b0011000000000000, 2, THUMB_ADD_SUB_imm_2_masks, THUMB_ADD_SUB_imm_2_shifts};
+const THUMB16_t THUMB_SUB_imm_2          = {0b0011100000000000, 2, THUMB_ADD_SUB_imm_2_masks, THUMB_ADD_SUB_imm_2_shifts};
+
 const uint16_t  THUMB_B_1_masks[]  = {0b0000111100000000, 0b0000000011111111};
 const int       THUMB_B_1_shifts[] = {         8        ,                  0};
 const THUMB16_t THUMB_B_1          = {0b1101000000000000, 2, THUMB_B_1_masks, THUMB_B_1_shifts};
@@ -65,4 +70,9 @@ const THUMB16_t THUMB_NOP          = {0b1011111100000000, 0, THUMB_NOP_masks, TH
 const uint16_t  THUMB_SVC_1_masks[] = {0b0000000011111111};
 const int       THUMB_SVC_1_shifts[]= {0};
 const THUMB16_t THUMB_SVC_1         = {0b1101111100000000, 1, THUMB_SVC_1_masks, THUMB_SVC_1_shifts};
+
+const uint16_t  THUMB_BX_1_masks[] = {0b0000000001111000};
+const int       THUMB_BX_1_shifts[]= {              3   };
+const THUMB16_t THUMB_BX_1         = {0b0100011100000000, 1, THUMB_BX_1_masks, THUMB_BX_1_shifts};
+
 #endif //ARM_INSTRUCTIONS_INCLUDE
