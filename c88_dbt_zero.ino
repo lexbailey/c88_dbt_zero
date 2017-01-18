@@ -117,7 +117,6 @@ extern "C"{
       
       svc_args[6] = R2;
       
-      //delay(300);
       return;
       exit(1);
     }
@@ -203,12 +202,15 @@ void setup() {
   translated_program = (uint16_t *)malloc(sizeof(uint16_t) * MAX_TRANSLATED_LENGTH);
   
   isRun = false;
-  user_program[0] = 0b11100000;
-  user_program[1] = 0b11101000;
-  user_program[2] = 0b01000000;
-  //user_program[3] = 0b11100000;
-  //user_program[4] = 0b01000000;
-
+  user_program[0] = 0b10000111;
+  user_program[1] = 0b11100000;
+  user_program[2] = 0b00000000;
+  user_program[3] = 0b00000000;
+  user_program[4] = 0b00000000;
+  user_program[5] = 0b00000000;
+  user_program[6] = 0b00000000;
+  user_program[7] = 0b00000010;
+  
   Serial.println("Translate...");
   translate();
   Serial.println("Translated program:");
@@ -257,6 +259,14 @@ void translate(){
       translated_program[curThumbOffset>>1] = thisThumbInstr;
       curThumbOffset += 2;
     }
+    if (thisC88Instr == C88_ADD){
+      Serial.println("ADD");
+      // ADD a | Add contents of memory at a
+      thisThumbInstr = encode_thumb_16(THUMB_SUB_imm_2, ARM_R0, 1); // R0 <= R0 - 1
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+    }
+    /*
     if (thisC88Instr == C88_JMP){
       Serial.println("JMP");
       // JMP a | Jump to address a.
@@ -267,11 +277,23 @@ void translate(){
       translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
       curThumbOffset += 2;
     }
+    */
     // For debugging (slower run speeds) insert supervisor calls after each instruction.
     if (runSpeed != C88_CONFIG_SPEED_FULL){
       Serial.println("t-SVC (Speed limiter)");
       thisThumbInstr = encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_REGULATE_SPEED)); // (Supervisor call)
       translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+    }
+    
+    if (thisC88Instr == C88_JMP){
+      Serial.println("JMP");
+      // JMP a | Jump to address a.
+      // All jumps on the C88 are absolute, thumb branches are relative.
+      // Lookup the offset to the target instruction and do some maths
+      int targetOffset = thumb_offsets[thisC88Operand]; // TODO this won't work for forward jumps
+      int relativeJump = (targetOffset - curThumbOffset)>>1;
+      translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
       curThumbOffset += 2;
     }
   }
@@ -321,9 +343,8 @@ volatile void dbt_loop(){
   //showTranslatedProgram();
   Serial.println("Running program");
   volatile uint32_t R0 = c88_reg;
-  volatile uint32_t R1 = 0;
+  volatile uint32_t R1 = (uint32_t)user_program;
   volatile uint16_t *target = translated_program + translated_pc_offset;
-  Serial.println((uint32_t)target, HEX);
   // This function will call the translated program after setting the registers
   call_translated_program(R0, R1, target);
   //exit(1);
@@ -341,7 +362,6 @@ volatile void dbt_loop(){
 
   c88_reg = R0;
   
-  Serial.println("Continue DBT.");
   Serial.print("R0: "); Serial.println(R0);
   Serial.print("R1: "); Serial.println(R1);
   delay(1000);
@@ -352,7 +372,5 @@ volatile void dbt_loop(){
 }
 
 void loop() {
-  Serial.print("Before: "); Serial.println(c88_reg);
   dbt_loop();
-  Serial.print("After: "); Serial.println(c88_reg);
 }
