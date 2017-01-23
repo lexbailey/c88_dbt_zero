@@ -27,6 +27,10 @@
  *  The DBT will also set R1 to zero and expect it to be non-zero upon return if
  *  the program is to stop as a result of a C88 STOP instruction.
  *  
+ *  There is also a need for the C88 program to access the untranslated version of
+ *  itself. The base pointer to the original C88 program is therefore placed in R3.
+ *  This allows use of LDRB Rt, [R3, #n] to get the nth byte of the C88 program
+ *  
  */
 
 #include <stdarg.h>
@@ -62,8 +66,11 @@ bool supervisorTestComplete = false;
 volatile uint8_t user_program[8] = {0,0,0,0,0,0,0,0};
 
 // Offsets into thumb program for start of each c88 instruction.
-// These offsets are specified in bytes.
+// These offsets are specified in bytes. This is used to store
+// locations for branch targets, which are patched up after the
+// rest of the program is translated.
 int thumb_offsets[8] = {0,0,0,0,0,0,0,0};
+int thumb_b_patch_points[8] = {0,0,0,0,0,0,0,0};
 
 // The translated program (thumb)
 //uint16_t translated_program[100];
@@ -202,14 +209,25 @@ void setup() {
   translated_program = (uint16_t *)malloc(sizeof(uint16_t) * MAX_TRANSLATED_LENGTH);
   
   isRun = false;
-  user_program[0] = 0b10000111;
-  user_program[1] = 0b11100000;
-  user_program[2] = 0b00000000;
+  /*
+  user_program[0] = 0b00000111;
+  user_program[1] = 0b10001110;
+  user_program[2] = 0b01000000;
   user_program[3] = 0b00000000;
   user_program[4] = 0b00000000;
   user_program[5] = 0b00000000;
-  user_program[6] = 0b00000000;
+  user_program[6] = 0b00000011;
   user_program[7] = 0b00000010;
+  */
+
+  user_program[0] = 0b11100000;
+  user_program[1] = 0b00100101;
+  user_program[2] = 0b00000110;
+  user_program[3] = 0b01000000;
+  user_program[4] = 0b00000000;
+  user_program[5] = 0b00000111;
+  user_program[6] = 0b00000001;
+  user_program[7] = 0b00000000;
   
   Serial.println("Translate...");
   translate();
@@ -259,25 +277,52 @@ void translate(){
       translated_program[curThumbOffset>>1] = thisThumbInstr;
       curThumbOffset += 2;
     }
-    if (thisC88Instr == C88_ADD){
-      Serial.println("ADD");
-      // ADD a | Add contents of memory at a
-      thisThumbInstr = encode_thumb_16(THUMB_SUB_imm_2, ARM_R0, 1); // R0 <= R0 - 1
+    if (thisC88Instr == C88_LOAD){
+      Serial.println("LOAD");
+      // LOAD a | Load contents of memory at a to register
+      thisThumbInstr = encode_thumb_16(THUMB_LDRB_imm_1, ARM_R0, ARM_R3, thisC88Operand); // R0 <= mem[a]
       translated_program[curThumbOffset>>1] = thisThumbInstr;
       curThumbOffset += 2;
     }
-    /*
-    if (thisC88Instr == C88_JMP){
-      Serial.println("JMP");
-      // JMP a | Jump to address a.
-      // All jumps on the C88 are absolute, thumb branches are relative.
-      // Lookup the offset to the target instruction and do some maths
-      int targetOffset = thumb_offsets[thisC88Operand]; // TODO this won't work for forward jumps
-      int relativeJump = targetOffset - curThumbOffset;
-      translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
+
+    if (thisC88Instr == C88_ADD){
+      Serial.println("ADD");
+      // ADD a | Add contents of memory at a to register
+      thisThumbInstr = encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand); // R4 <= mem[a]
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+      thisThumbInstr = encode_thumb_16(THUMB_ADDS_1, ARM_R0, ARM_R0, ARM_R4); // R0 <= R0 + R4
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
       curThumbOffset += 2;
     }
-    */
+
+    if (thisC88Instr == C88_SUB){
+      Serial.println("SUB");
+      // SUB a | Subtract contents of memory at a to register
+      thisThumbInstr = encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand); // R4 <= mem[a]
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+      thisThumbInstr = encode_thumb_16(THUMB_SUBS_1, ARM_R0, ARM_R0, ARM_R4); // R0 <= R0 + R4
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+    }
+
+    if (thisC88Instr == C88_TSG){
+      Serial.println("TSG");
+      // TSG a | Skip the next instruction if mem[a] is greater than the register
+      thisThumbInstr = encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand); // R4 <= mem[a]
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+      thisThumbInstr = encode_thumb_16(THUMB_CMP_1, ARM_R4, ARM_R0); // flags = flags_for("R4 - R0")
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+      // Just like the JMP instruction, this will need patching as we don't
+      // know how far to jump yet
+      translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_NOP);
+      thumb_b_patch_points[i] = curThumbOffset;
+      curThumbOffset += 2;
+    }
+
     // For debugging (slower run speeds) insert supervisor calls after each instruction.
     if (runSpeed != C88_CONFIG_SPEED_FULL){
       Serial.println("t-SVC (Speed limiter)");
@@ -285,15 +330,15 @@ void translate(){
       translated_program[curThumbOffset>>1] = thisThumbInstr;
       curThumbOffset += 2;
     }
-    
+
     if (thisC88Instr == C88_JMP){
       Serial.println("JMP");
       // JMP a | Jump to address a.
-      // All jumps on the C88 are absolute, thumb branches are relative.
-      // Lookup the offset to the target instruction and do some maths
-      int targetOffset = thumb_offsets[thisC88Operand]; // TODO this won't work for forward jumps
-      int relativeJump = (targetOffset - curThumbOffset)>>1;
-      translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
+      // The branch address (in the thumb program) might not be known yet
+      // This code just allocates space for the jump, which will be patched up later.
+      // We just need one sixteen bit instruction of space
+      translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_NOP);
+      thumb_b_patch_points[i] = curThumbOffset;
       curThumbOffset += 2;
     }
   }
@@ -304,6 +349,35 @@ void translate(){
   Serial.println("t-B (loop to zero)");
   translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
   curThumbOffset += 2;
+
+  // Loop over the program again, patching up the branches that we couldn't
+  // assemble in the first pass.
+  for (i =0; i<= 7; i++){
+    uint8_t thisC88Instr   = user_program[i] & 0b11111000;
+    uint8_t thisC88Operand = user_program[i] & 0b00000111;
+    if (thisC88Instr == C88_JMP){
+      Serial.println("Patching JMP");
+      // JMP a | Jump to address a.
+      // All jumps on the C88 are absolute, thumb branches are relative.
+      // Lookup the offset to the target instruction and do some maths
+      int targetOffset = thumb_offsets[thisC88Operand];
+      int patch_offset = thumb_b_patch_points[i];
+      int relativeJump = (targetOffset - patch_offset -3)>>1;
+      translated_program[patch_offset>>1] = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
+      curThumbOffset += 2;
+    }
+    if (thisC88Instr == C88_TSG){
+      Serial.println("Patching TSG");
+      // TSG a | Skip the next instruction if mem[a] is greater than the register
+      // All jumps on the C88 are absolute, thumb branches are relative.
+      // Lookup the offset to the target instruction and do some maths
+      int targetOffset = thumb_offsets[(i+2)%8];
+      int patch_offset = thumb_b_patch_points[i];
+      int relativeJump = (targetOffset - patch_offset -3)>>1;
+      translated_program[patch_offset>>1] = encode_thumb_16(THUMB_B_1, THUMB_COND_GT, relativeJump); // If flags[GT] then PC <= PC + relativeJump
+      curThumbOffset += 2;
+    }
+  }
 
 }
 
@@ -319,21 +393,24 @@ void showTranslatedProgram(){
 // This function will call an array as if it is a function.
 // Three parameters can be passed to the function. If the called function
 // returns normally, so too will this function.
-volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, uint32_t R1in, volatile void *target) __attribute__ ((naked));
-volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, uint32_t R1in, volatile void *target){
+volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, uint32_t R1in, volatile void *target, volatile uint8_t *R3in) __attribute__ ((naked));
+volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, uint32_t R1in, volatile void *target, volatile uint8_t *R3in){
   // Use BLX to call the target code
   // when using BLX, the LSB indicates the instruction set state.
   // This bit must be 1 to indicate that we should use thumb state.
   // This function also copies the return address from the stack into r2
   // so that the supervisor can reliably find the return address.
   asm(
-    "  mov  r3, r2   \n" // r3 <= target
+    "  mov  r5, r2   \n" // r5 <= target
     "  mov  r2, lr   \n" // r2 <= lr (return address for DBT)
     "  mov  r4, #1   \n" // r4 <= 1
-    "  orr  r3, r4   \n" // r3 <= target | 1 (r3 is the target with the thumb bit set)
-    "  blx  r3       \n" // A return from this call happens for stop instructions
+    "  orr  r5, r4   \n" // r5 <= target | 1 (r5 is the target with the thumb bit set)
+    "  blx  r5       \n" // A return from this call happens for stop instructions
     "  bx   lr       \n"
   );
+  // IMPORTANT NOTE: R0, R1 and R3 are not touched by this code.
+  // By making use of the calling convention, these registers allready contain
+  // the values that the translated program expects.
 }
 
 uint32_t c88_reg = 0;
@@ -342,11 +419,14 @@ volatile void dbt_loop(){
   //Serial.println("Translated program:");
   //showTranslatedProgram();
   Serial.println("Running program");
+  
   volatile uint32_t R0 = c88_reg;
-  volatile uint32_t R1 = (uint32_t)user_program;
+  volatile uint32_t R1 = 0;
   volatile uint16_t *target = translated_program + translated_pc_offset;
+  volatile uint8_t  *originalProgram = user_program;
+  Serial.print("From address: 0x");Serial.println((uint32_t)target, HEX);
   // This function will call the translated program after setting the registers
-  call_translated_program(R0, R1, target);
+  call_translated_program(R0, R1, target, originalProgram);
   //exit(1);
   asm("":::"lr", "r2", "r3", "r4");// does this work? if so why?
   // Now we need to extract the R0 and R1 values before anything else has a chance to
