@@ -220,14 +220,14 @@ void setup() {
   user_program[7] = 0b00000010;
   */
 
-  user_program[0] = 0b11100000;
-  user_program[1] = 0b00100101;
-  user_program[2] = 0b00000110;
-  user_program[3] = 0b01000000;
-  user_program[4] = 0b00000000;
-  user_program[5] = 0b00000111;
-  user_program[6] = 0b00000001;
-  user_program[7] = 0b00000000;
+  user_program[0] = 0b01000001;
+  user_program[1] = 0b00000001;
+  user_program[2] = 0b10100001;
+  user_program[3] = 0b00101000;
+  user_program[4] = 0b01000010;
+  user_program[5] = 0b10101001;
+  user_program[6] = 0b00110001;
+  user_program[7] = 0b01000101;
   
   Serial.println("Translate...");
   translate();
@@ -307,8 +307,27 @@ void translate(){
       curThumbOffset += 2;
     }
 
-    if (thisC88Instr == C88_TSG){
-      Serial.println("TSG");
+    if (thisC88Instr == C88_SHL){
+      Serial.println("SHL");
+      // SHL a | Shift left by immediate value
+      thisThumbInstr = encode_thumb_16(THUMB_LSL_imm_1, ARM_R0, ARM_R0, thisC88Operand); // R0 <= R0 << a
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+    }
+
+    if (thisC88Instr == C88_SHR){
+      Serial.println("SHR");
+      // SHR a | Shift left by immediate value
+      thisThumbInstr = encode_thumb_16(THUMB_LSR_imm_1, ARM_R0, ARM_R0, thisC88Operand); // R0 <= R0 >> a
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+    }
+
+    if ((thisC88Instr == C88_TSG)||
+        (thisC88Instr == C88_TSL)||
+        (thisC88Instr == C88_TSE)||
+        (thisC88Instr == C88_TSI)){
+      Serial.println("TSx");
       // TSG a | Skip the next instruction if mem[a] is greater than the register
       thisThumbInstr = encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand); // R4 <= mem[a]
       translated_program[curThumbOffset>>1] = thisThumbInstr;
@@ -359,7 +378,7 @@ void translate(){
       Serial.println("Patching JMP");
       // JMP a | Jump to address a.
       // All jumps on the C88 are absolute, thumb branches are relative.
-      // Lookup the offset to the target instruction and do some maths
+      // Lookup the offset to the target instruction and do some maths.
       int targetOffset = thumb_offsets[thisC88Operand];
       int patch_offset = thumb_b_patch_points[i];
       int relativeJump = (targetOffset - patch_offset -3)>>1;
@@ -369,12 +388,37 @@ void translate(){
     if (thisC88Instr == C88_TSG){
       Serial.println("Patching TSG");
       // TSG a | Skip the next instruction if mem[a] is greater than the register
-      // All jumps on the C88 are absolute, thumb branches are relative.
-      // Lookup the offset to the target instruction and do some maths
       int targetOffset = thumb_offsets[(i+2)%8];
       int patch_offset = thumb_b_patch_points[i];
       int relativeJump = (targetOffset - patch_offset -3)>>1;
       translated_program[patch_offset>>1] = encode_thumb_16(THUMB_B_1, THUMB_COND_GT, relativeJump); // If flags[GT] then PC <= PC + relativeJump
+      curThumbOffset += 2;
+    }
+    if (thisC88Instr == C88_TSL){
+      Serial.println("Patching TSL");
+      // TSL a | Skip the next instruction if mem[a] is less than the register
+      int targetOffset = thumb_offsets[(i+2)%8];
+      int patch_offset = thumb_b_patch_points[i];
+      int relativeJump = (targetOffset - patch_offset -3)>>1;
+      translated_program[patch_offset>>1] = encode_thumb_16(THUMB_B_1, THUMB_COND_LT, relativeJump); // If flags[LT] then PC <= PC + relativeJump
+      curThumbOffset += 2;
+    }
+    if (thisC88Instr == C88_TSE){
+      Serial.println("Patching TSE");
+      // TSE a | Skip the next instruction if mem[a] is equal to the register
+      int targetOffset = thumb_offsets[(i+2)%8];
+      int patch_offset = thumb_b_patch_points[i];
+      int relativeJump = (targetOffset - patch_offset -3)>>1;
+      translated_program[patch_offset>>1] = encode_thumb_16(THUMB_B_1, THUMB_COND_EQ, relativeJump); // If flags[Z] then PC <= PC + relativeJump
+      curThumbOffset += 2;
+    }
+    if (thisC88Instr == C88_TSI){
+      Serial.println("Patching TSI");
+      // TSI a | Skip the next instruction if mem[a] is equal to the register
+      int targetOffset = thumb_offsets[(i+2)%8];
+      int patch_offset = thumb_b_patch_points[i];
+      int relativeJump = (targetOffset - patch_offset -3)>>1;
+      translated_program[patch_offset>>1] = encode_thumb_16(THUMB_B_1, THUMB_COND_NE, relativeJump); // If !flags[Z] then PC <= PC + relativeJump
       curThumbOffset += 2;
     }
   }
