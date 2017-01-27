@@ -220,14 +220,14 @@ void setup() {
   user_program[7] = 0b00000010;
   */
 
-  user_program[0] = 0b01000001;
-  user_program[1] = 0b00000001;
-  user_program[2] = 0b10100001;
-  user_program[3] = 0b00101000;
-  user_program[4] = 0b01000010;
-  user_program[5] = 0b10101001;
-  user_program[6] = 0b00110001;
-  user_program[7] = 0b01000101;
+  user_program[0] = 0b11100000;
+  user_program[1] = 0b10110001;
+  user_program[2] = 0b01000001;
+  user_program[3] = 0b00000000;
+  user_program[4] = 0b00000000;
+  user_program[5] = 0b00000000;
+  user_program[6] = 0b00000000;
+  user_program[7] = 0b00000000;
   
   Serial.println("Translate...");
   translate();
@@ -285,24 +285,24 @@ void translate(){
       curThumbOffset += 2;
     }
 
-    if (thisC88Instr == C88_ADD){
-      Serial.println("ADD");
+    if ((thisC88Instr == C88_ADD) || (thisC88Instr == C88_ADDU)){
+      Serial.println("ADD[U]");
       // ADD a | Add contents of memory at a to register
       thisThumbInstr = encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand); // R4 <= mem[a]
       translated_program[curThumbOffset>>1] = thisThumbInstr;
       curThumbOffset += 2;
-      thisThumbInstr = encode_thumb_16(THUMB_ADDS_1, ARM_R0, ARM_R0, ARM_R4); // R0 <= R0 + R4
+      thisThumbInstr = encode_thumb_16(THUMB_ADD_1, ARM_R0, ARM_R0, ARM_R4); // R0 <= R0 + R4
       translated_program[curThumbOffset>>1] = thisThumbInstr;
       curThumbOffset += 2;
     }
 
-    if (thisC88Instr == C88_SUB){
-      Serial.println("SUB");
+    if ((thisC88Instr == C88_SUB) || (thisC88Instr == C88_SUBU)){
+      Serial.println("SUB[U]");
       // SUB a | Subtract contents of memory at a to register
       thisThumbInstr = encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand); // R4 <= mem[a]
       translated_program[curThumbOffset>>1] = thisThumbInstr;
       curThumbOffset += 2;
-      thisThumbInstr = encode_thumb_16(THUMB_SUBS_1, ARM_R0, ARM_R0, ARM_R4); // R0 <= R0 + R4
+      thisThumbInstr = encode_thumb_16(THUMB_SUB_1, ARM_R0, ARM_R0, ARM_R4); // R0 <= R0 + R4
       translated_program[curThumbOffset>>1] = thisThumbInstr;
       curThumbOffset += 2;
     }
@@ -317,10 +317,44 @@ void translate(){
 
     if (thisC88Instr == C88_SHR){
       Serial.println("SHR");
-      // SHR a | Shift left by immediate value
+      // SHR a | Shift right by immediate value
       thisThumbInstr = encode_thumb_16(THUMB_LSR_imm_1, ARM_R0, ARM_R0, thisC88Operand); // R0 <= R0 >> a
       translated_program[curThumbOffset>>1] = thisThumbInstr;
       curThumbOffset += 2;
+    }
+
+    if (thisC88Instr == C88_ROL){
+      // TODO Fix the bug that means the overflow bit is always considered to be 1
+      Serial.println("ROL");
+      // ROL a | Rotate left by immediate value
+      // There is no direct mapping to a thumb instruction here.
+      // We need to shift, extract the MSB+1 bit, shift it to the LSB, then OR it in.
+      thisThumbInstr = encode_thumb_16(THUMB_LSL_imm_1, ARM_R0, ARM_R0, thisC88Operand); // R0 <= R0 << a
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+      thisThumbInstr = encode_thumb_16(THUMB_MOV_imm_1, ARM_R4, 1); // R4 <= 1
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+      thisThumbInstr = encode_thumb_16(THUMB_LSL_imm_1, ARM_R4, ARM_R4, 8); // R4 <= R4 << 8 (R4 <= 512)
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+      thisThumbInstr = encode_thumb_16(THUMB_AND_1, ARM_R4, ARM_R0); // R4 <= R4 & R0
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+      thisThumbInstr = encode_thumb_16(THUMB_LSR_imm_1, ARM_R4, ARM_R4, 8); // R4 <= R4 >> 8
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+      thisThumbInstr = encode_thumb_16(THUMB_ORR_1, ARM_R0, ARM_R4); // R0 <= R4 | R0
+      translated_program[curThumbOffset>>1] = thisThumbInstr;
+      curThumbOffset += 2;
+      
+      /* LSL  R0, R0, #a
+       * MOV  R4, #1
+       * LSL  R4, R4, #8
+       * AND  R4, R0
+       * LSR  R4, R4, #8
+       * ORR  R0, R4
+       */
     }
 
     if ((thisC88Instr == C88_TSG)||

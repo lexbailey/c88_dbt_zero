@@ -79,10 +79,10 @@ const uint16_t  THUMB_LDRB_imm_1_masks[] = {0b0000000000000111, 0b00000000000111
 const int       THUMB_LDRB_imm_1_shifts[]= {                 0,                3   ,            6      };
 const THUMB16_t THUMB_LDRB_imm_1         = {0b0111100000000000, 3, THUMB_LDRB_imm_1_masks, THUMB_LDRB_imm_1_shifts};
 
-const uint16_t  THUMB_ADDS_SUBS_1_masks[] = {0b0000000000000111, 0b00000000000111000, 0b0000000111000000};
-const int       THUMB_ADDS_SUBS_1_shifts[]= {                 0,                3   ,            6      };
-const THUMB16_t THUMB_ADDS_1              = {0b0001100000000000, 3, THUMB_ADDS_SUBS_1_masks, THUMB_ADDS_SUBS_1_shifts};
-const THUMB16_t THUMB_SUBS_1              = {0b0001101000000000, 3, THUMB_ADDS_SUBS_1_masks, THUMB_ADDS_SUBS_1_shifts};
+const uint16_t  THUMB_ADD_SUB_1_masks[] = {0b0000000000000111, 0b00000000000111000, 0b0000000111000000};
+const int       THUMB_ADD_SUB_1_shifts[]= {                 0,                3   ,            6      };
+const THUMB16_t THUMB_ADD_1              = {0b0001100000000000, 3, THUMB_ADD_SUB_1_masks, THUMB_ADD_SUB_1_shifts};
+const THUMB16_t THUMB_SUB_1              = {0b0001101000000000, 3, THUMB_ADD_SUB_1_masks, THUMB_ADD_SUB_1_shifts};
 
 const uint16_t  THUMB_CMP_1_masks[] = {0b0000000000000111, 0b00000000000111000};
 const int       THUMB_CMP_1_shifts[]= {                 0,                3   };
@@ -92,5 +92,14 @@ const uint16_t  THUMB_LSL_LSR_imm_1_masks[] = {0b0000000000000111, 0b00000000000
 const int       THUMB_LSL_LSR_imm_1_shifts[]= {                 0,                3   ,            6      };
 const THUMB16_t THUMB_LSL_imm_1             = {0b0000000000000000, 3, THUMB_LSL_LSR_imm_1_masks, THUMB_LSL_LSR_imm_1_shifts};
 const THUMB16_t THUMB_LSR_imm_1             = {0b0000100000000000, 3, THUMB_LSL_LSR_imm_1_masks, THUMB_LSL_LSR_imm_1_shifts};
+
+const uint16_t  THUMB_MOV_imm_1_masks[]  = {0b0000011100000000, 0b0000000011111111};
+const int       THUMB_MOV_imm_1_shifts[] = {         8        ,                  0};
+const THUMB16_t THUMB_MOV_imm_1          = {0b0010000000000000, 2, THUMB_MOV_imm_1_masks, THUMB_MOV_imm_1_shifts};
+
+const uint16_t  THUMB_AND_ORR_1_masks[] = {0b0000000000000111, 0b00000000000111000};
+const int       THUMB_AND_ORR_1_shifts[]= {                 0,                3   };
+const THUMB16_t THUMB_AND_1             = {0b0100001010000000, 2, THUMB_AND_ORR_1_masks, THUMB_AND_ORR_1_shifts};
+const THUMB16_t THUMB_ORR_1             = {0b0100001100000000, 2, THUMB_AND_ORR_1_masks, THUMB_AND_ORR_1_shifts};
 
 #endif //ARM_INSTRUCTIONS_INCLUDE
