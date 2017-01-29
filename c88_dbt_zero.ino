@@ -31,6 +31,19 @@
  *  itself. The base pointer to the original C88 program is therefore placed in R3.
  *  This allows use of LDRB Rt, [R3, #n] to get the nth byte of the C88 program
  *  
+ *  Notes:
+ *    As the ARM registers are 32 bits wide, calculations that cause overflows when
+ *    done in the C88's 8 bit register, will not cause overflows in R0. This is not
+ *    usually a problem as the C88 does not take any special action when an overflow
+ *    occurs. This can be a problem for some instructions however. It is therefore the 
+ *    responsibility of each instruction to sanitize R0 if necassary. It is not the
+ *    responsibility of the instruction that produced the overflow result to sanitize
+ *    R0.
+ *    
+ *    This is typically done with this code:
+ *    MOV  R4, 0xFF
+ *    AND  R0, R4
+ *  
  */
 
 #include <stdarg.h>
@@ -51,7 +64,7 @@
 #define CFSR_ADDR     ((uint32_t *)0xE000ED28)
 #define CFSR          (*CFSR_ADDR)
 
-#define MAX_TRANSLATED_LENGTH (100)
+#define MAX_TRANSLATED_LENGTH (255)
 
 #define SVC_NUMBER(x) (x)
 #define SVC_STRING_SUB(x) #x
@@ -220,6 +233,7 @@ void setup() {
   user_program[7] = 0b00000010;
   */
 
+/* //CYLON
   user_program[0] = 0b01000001;
   user_program[1] = 0b00000001;
   user_program[2] = 0b10100001;
@@ -228,6 +242,12 @@ void setup() {
   user_program[5] = 0b10101001;
   user_program[6] = 0b00110001;
   user_program[7] = 0b01000101;
+  */
+
+  user_program[0] = 0b11100000;
+  user_program[1] = 0b11110000;
+  user_program[2] = 0b01000001;
+
   
   Serial.println("Translate...");
   translate();
@@ -300,7 +320,35 @@ void translate(){
       Serial.println("SUB[U]");
       // SUB a | Subtract contents of memory at a to register
       thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand)); // R4 <= mem[a]
-      thumb_asm(encode_thumb_16(THUMB_SUB_1, ARM_R0, ARM_R0, ARM_R4)); // R0 <= R0 + R4
+      thumb_asm(encode_thumb_16(THUMB_SUB_1,      ARM_R0, ARM_R0, ARM_R4)); // R0 <= R0 + R4
+    }
+
+    if (thisC88Instr == C88_MUL){
+      Serial.println("MUL");
+      // MULU a | Multiply contents of memory at a by register, unsigned
+      // Sanitize R0 so it is sign extended
+      thumb_asm(encode_thumb_16(THUMB_SXTB_1,     ARM_R0, ARM_R0                )); // R0 <= SignExt(R0[7:0])
+      thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand)); // R4 <= mem[a]
+      thumb_asm(encode_thumb_16(THUMB_MUL_1,      ARM_R0, ARM_R4                )); // R0 <= R0 * R4
+    }
+    
+    if (thisC88Instr == C88_MULU){
+      Serial.println("MULU");
+      // MULU a | Multiply contents of memory at a by register, unsigned
+      // Sanitize R0 so it is definately not a signed number
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R4, 0xff                  )); // R4 <= 0xff
+      thumb_asm(encode_thumb_16(THUMB_AND_1,      ARM_R0, ARM_R4                )); // R0 <= R0 & R4
+      thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand)); // R4 <= mem[a]
+      thumb_asm(encode_thumb_16(THUMB_MUL_1,      ARM_R0, ARM_R4                )); // R0 <= R0 * R4
+    }
+
+    if (thisC88Instr == C88_DOUBLE){
+      Serial.println("DOUBLE");
+      // MULU a | Multiply contents of memory at a by register, unsigned
+      // Sanitize R0 so it is sign extended
+      thumb_asm(encode_thumb_16(THUMB_SXTB_1,     ARM_R0, ARM_R0 )); // R0 <= SignExt(R0[7:0])
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R4, 2      )); // R4 <= 2
+      thumb_asm(encode_thumb_16(THUMB_MUL_1,      ARM_R0, ARM_R4 )); // R0 <= R0 * R4
     }
 
     if (thisC88Instr == C88_SHL){
@@ -319,8 +367,8 @@ void translate(){
       Serial.println("ROL");
       // ROL a | Rotate left by immediate value
       // There is no direct mapping to a thumb instruction here.
-      // We need to shift, extract the n MSBs, shift them to the LSBs, then OR it in.
-
+      // Put two copies of the register next to each other, then shift backwards
+      // by (8-a)
       thumb_asm(encode_thumb_16(THUMB_MOV_imm_1, ARM_R4, 0xff                    )); // R4 <= 0xff
       thumb_asm(encode_thumb_16(THUMB_AND_1,     ARM_R0, ARM_R4                  )); // R0 <= R0 & R4
       thumb_asm(encode_thumb_16(THUMB_LSL_imm_1, ARM_R4, ARM_R0, 8               )); // R4 <= R0 << 8
@@ -340,8 +388,12 @@ void translate(){
       Serial.println("ROR");
       // ROL a | Rotate left by immediate value
       // There is no direct mapping to a thumb instruction here.
-      
-      // TODO
+      // Put two copies of the register next to each other, then shift
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1, ARM_R4, 0xff                  )); // R4 <= 0xff
+      thumb_asm(encode_thumb_16(THUMB_AND_1,     ARM_R0, ARM_R4                )); // R0 <= R0 & R4
+      thumb_asm(encode_thumb_16(THUMB_LSL_imm_1, ARM_R4, ARM_R0, 8             )); // R4 <= R0 << 8
+      thumb_asm(encode_thumb_16(THUMB_ORR_1,     ARM_R0, ARM_R4                )); // R0 <= R0 | R4
+      thumb_asm(encode_thumb_16(THUMB_LSR_imm_1, ARM_R0, ARM_R0, thisC88Operand)); // R0 <= R0 >> a
     }
 
     if ((thisC88Instr == C88_TSG)||
@@ -491,7 +543,7 @@ volatile void dbt_loop(){
     ::
   );
 
-  c88_reg = R0;
+  c88_reg = R0 & 0xff;
   
   Serial.print("R0: "); Serial.println(R0);
   Serial.print("R1: "); Serial.println(R1);
