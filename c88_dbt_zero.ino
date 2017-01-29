@@ -220,14 +220,14 @@ void setup() {
   user_program[7] = 0b00000010;
   */
 
-  user_program[0] = 0b11100000;
-  user_program[1] = 0b10110001;
-  user_program[2] = 0b01000001;
-  user_program[3] = 0b00000000;
-  user_program[4] = 0b00000000;
-  user_program[5] = 0b00000000;
-  user_program[6] = 0b00000000;
-  user_program[7] = 0b00000000;
+  user_program[0] = 0b01000001;
+  user_program[1] = 0b00000001;
+  user_program[2] = 0b10100001;
+  user_program[3] = 0b00101000;
+  user_program[4] = 0b01000010;
+  user_program[5] = 0b10101001;
+  user_program[6] = 0b00110001;
+  user_program[7] = 0b01000101;
   
   Serial.println("Translate...");
   translate();
@@ -255,106 +255,93 @@ uint16_t encode_thumb_16(THUMB16_t instruction, ...){
   return output;
 }
 
+int curThumbOffset; // Offset into translated program in number of 16 bit thumb instructions
+
+void thumb_asm(uint16_t instr){
+  translated_program[curThumbOffset >> 1] = instr;
+  curThumbOffset += 2;
+}
+
+void thumb_asm_patch(uint16_t instr, int offset){
+  translated_program[offset >> 1] = instr;
+}
+
 void translate(){
   int i;
-  int curThumbOffset = 0;
+  curThumbOffset = 0;
   for (i =0; i<= 7; i++){
     uint8_t thisC88Instr   = user_program[i] & 0b11111000;
     uint8_t thisC88Operand = user_program[i] & 0b00000111;
-    uint16_t thisThumbInstr = encode_thumb_16(THUMB_NOP);
     thumb_offsets[i] = curThumbOffset;
     if (thisC88Instr == C88_INC){
       Serial.println("INC");
       // INC | Increment register
-      thisThumbInstr = encode_thumb_16(THUMB_ADD_imm_2, ARM_R0, 1); // R0 <= R0 + 1
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
+      thumb_asm(encode_thumb_16(THUMB_ADD_imm_2, ARM_R0, 1)); // R0 <= R0 + 1
     }
     if (thisC88Instr == C88_DEC){
       Serial.println("DEC");
       // DEC | Decrement register
-      thisThumbInstr = encode_thumb_16(THUMB_SUB_imm_2, ARM_R0, 1); // R0 <= R0 - 1
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
+      thumb_asm(encode_thumb_16(THUMB_SUB_imm_2, ARM_R0, 1)); // R0 <= R0 - 1
     }
     if (thisC88Instr == C88_LOAD){
       Serial.println("LOAD");
       // LOAD a | Load contents of memory at a to register
-      thisThumbInstr = encode_thumb_16(THUMB_LDRB_imm_1, ARM_R0, ARM_R3, thisC88Operand); // R0 <= mem[a]
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
+      thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R0, ARM_R3, thisC88Operand)); // R0 <= mem[a]
     }
 
     if ((thisC88Instr == C88_ADD) || (thisC88Instr == C88_ADDU)){
       Serial.println("ADD[U]");
       // ADD a | Add contents of memory at a to register
-      thisThumbInstr = encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand); // R4 <= mem[a]
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
-      thisThumbInstr = encode_thumb_16(THUMB_ADD_1, ARM_R0, ARM_R0, ARM_R4); // R0 <= R0 + R4
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
+      thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand)); // R4 <= mem[a]
+      thumb_asm(encode_thumb_16(THUMB_ADD_1, ARM_R0, ARM_R0, ARM_R4)); // R0 <= R0 + R4
     }
 
     if ((thisC88Instr == C88_SUB) || (thisC88Instr == C88_SUBU)){
       Serial.println("SUB[U]");
       // SUB a | Subtract contents of memory at a to register
-      thisThumbInstr = encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand); // R4 <= mem[a]
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
-      thisThumbInstr = encode_thumb_16(THUMB_SUB_1, ARM_R0, ARM_R0, ARM_R4); // R0 <= R0 + R4
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
+      thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand)); // R4 <= mem[a]
+      thumb_asm(encode_thumb_16(THUMB_SUB_1, ARM_R0, ARM_R0, ARM_R4)); // R0 <= R0 + R4
     }
 
     if (thisC88Instr == C88_SHL){
       Serial.println("SHL");
       // SHL a | Shift left by immediate value
-      thisThumbInstr = encode_thumb_16(THUMB_LSL_imm_1, ARM_R0, ARM_R0, thisC88Operand); // R0 <= R0 << a
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
+      thumb_asm(encode_thumb_16(THUMB_LSL_imm_1, ARM_R0, ARM_R0, thisC88Operand)); // R0 <= R0 << a
     }
 
     if (thisC88Instr == C88_SHR){
       Serial.println("SHR");
       // SHR a | Shift right by immediate value
-      thisThumbInstr = encode_thumb_16(THUMB_LSR_imm_1, ARM_R0, ARM_R0, thisC88Operand); // R0 <= R0 >> a
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
+      thumb_asm(encode_thumb_16(THUMB_LSR_imm_1, ARM_R0, ARM_R0, thisC88Operand)); // R0 <= R0 >> a
     }
 
     if (thisC88Instr == C88_ROL){
-      // TODO Fix the bug that means the overflow bit is always considered to be 1
       Serial.println("ROL");
       // ROL a | Rotate left by immediate value
       // There is no direct mapping to a thumb instruction here.
-      // We need to shift, extract the MSB+1 bit, shift it to the LSB, then OR it in.
-      thisThumbInstr = encode_thumb_16(THUMB_LSL_imm_1, ARM_R0, ARM_R0, thisC88Operand); // R0 <= R0 << a
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
-      thisThumbInstr = encode_thumb_16(THUMB_MOV_imm_1, ARM_R4, 1); // R4 <= 1
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
-      thisThumbInstr = encode_thumb_16(THUMB_LSL_imm_1, ARM_R4, ARM_R4, 8); // R4 <= R4 << 8 (R4 <= 512)
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
-      thisThumbInstr = encode_thumb_16(THUMB_AND_1, ARM_R4, ARM_R0); // R4 <= R4 & R0
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
-      thisThumbInstr = encode_thumb_16(THUMB_LSR_imm_1, ARM_R4, ARM_R4, 8); // R4 <= R4 >> 8
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
-      thisThumbInstr = encode_thumb_16(THUMB_ORR_1, ARM_R0, ARM_R4); // R0 <= R4 | R0
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
+      // We need to shift, extract the n MSBs, shift them to the LSBs, then OR it in.
+
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1, ARM_R4, 0xff                    )); // R4 <= 0xff
+      thumb_asm(encode_thumb_16(THUMB_AND_1,     ARM_R0, ARM_R4                  )); // R0 <= R0 & R4
+      thumb_asm(encode_thumb_16(THUMB_LSL_imm_1, ARM_R4, ARM_R0, 8               )); // R4 <= R0 << 8
+      thumb_asm(encode_thumb_16(THUMB_ORR_1,     ARM_R0, ARM_R4                  )); // R0 <= R0 | R4
+      thumb_asm(encode_thumb_16(THUMB_LSR_imm_1, ARM_R0, ARM_R0, 8-thisC88Operand)); // R0 <= R0 >> (8-a)
       
-      /* LSL  R0, R0, #a
-       * MOV  R4, #1
-       * LSL  R4, R4, #8
-       * AND  R4, R0
-       * LSR  R4, R4, #8
-       * ORR  R0, R4
-       */
+      /*
+      MOV  R4, #ff
+      AND  R0, R4
+      LSL  R4, R0, 8
+      ORR  R0, R4
+      LSR  R0, R0, #(8-a)
+      */
+    }
+
+    if (thisC88Instr == C88_ROR){
+      Serial.println("ROR");
+      // ROL a | Rotate left by immediate value
+      // There is no direct mapping to a thumb instruction here.
+      
+      // TODO
     }
 
     if ((thisC88Instr == C88_TSG)||
@@ -362,26 +349,19 @@ void translate(){
         (thisC88Instr == C88_TSE)||
         (thisC88Instr == C88_TSI)){
       Serial.println("TSx");
-      // TSG a | Skip the next instruction if mem[a] is greater than the register
-      thisThumbInstr = encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand); // R4 <= mem[a]
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
-      thisThumbInstr = encode_thumb_16(THUMB_CMP_1, ARM_R4, ARM_R0); // flags = flags_for("R4 - R0")
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
+      // TSx a | Skip the next instruction if mem[a] meets some condition
+      thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand)); // R4 <= mem[a]
+      thumb_asm(encode_thumb_16(THUMB_CMP_1, ARM_R4, ARM_R0)); // flags = flags_for("R4 - R0")
       // Just like the JMP instruction, this will need patching as we don't
       // know how far to jump yet
-      translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_NOP);
       thumb_b_patch_points[i] = curThumbOffset;
-      curThumbOffset += 2;
+      thumb_asm(encode_thumb_16(THUMB_NOP));
     }
 
     // For debugging (slower run speeds) insert supervisor calls after each instruction.
     if (runSpeed != C88_CONFIG_SPEED_FULL){
       Serial.println("t-SVC (Speed limiter)");
-      thisThumbInstr = encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_REGULATE_SPEED)); // (Supervisor call)
-      translated_program[curThumbOffset>>1] = thisThumbInstr;
-      curThumbOffset += 2;
+      thumb_asm(encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_REGULATE_SPEED))); // (Supervisor call)
     }
 
     if (thisC88Instr == C88_JMP){
@@ -390,9 +370,8 @@ void translate(){
       // The branch address (in the thumb program) might not be known yet
       // This code just allocates space for the jump, which will be patched up later.
       // We just need one sixteen bit instruction of space
-      translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_NOP);
       thumb_b_patch_points[i] = curThumbOffset;
-      curThumbOffset += 2;
+      thumb_asm(encode_thumb_16(THUMB_NOP));
     }
   }
 
@@ -400,8 +379,7 @@ void translate(){
   int targetOffset = thumb_offsets[0]; // Should always be zero
   int relativeJump = targetOffset - curThumbOffset;
   Serial.println("t-B (loop to zero)");
-  translated_program[curThumbOffset>>1] = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
-  curThumbOffset += 2;
+  thumb_asm(encode_thumb_16(THUMB_B_2, relativeJump)); // PC <= PC + relativeJump
 
   // Loop over the program again, patching up the branches that we couldn't
   // assemble in the first pass.
@@ -416,8 +394,7 @@ void translate(){
       int targetOffset = thumb_offsets[thisC88Operand];
       int patch_offset = thumb_b_patch_points[i];
       int relativeJump = (targetOffset - patch_offset -3)>>1;
-      translated_program[patch_offset>>1] = encode_thumb_16(THUMB_B_2, relativeJump); // PC <= PC + relativeJump
-      curThumbOffset += 2;
+      thumb_asm_patch(encode_thumb_16(THUMB_B_2, relativeJump), patch_offset); // PC <= PC + relativeJump
     }
     if (thisC88Instr == C88_TSG){
       Serial.println("Patching TSG");
@@ -425,8 +402,7 @@ void translate(){
       int targetOffset = thumb_offsets[(i+2)%8];
       int patch_offset = thumb_b_patch_points[i];
       int relativeJump = (targetOffset - patch_offset -3)>>1;
-      translated_program[patch_offset>>1] = encode_thumb_16(THUMB_B_1, THUMB_COND_GT, relativeJump); // If flags[GT] then PC <= PC + relativeJump
-      curThumbOffset += 2;
+      thumb_asm_patch(encode_thumb_16(THUMB_B_1, THUMB_COND_GT, relativeJump), patch_offset); // If flags[GT] then PC <= PC + relativeJump
     }
     if (thisC88Instr == C88_TSL){
       Serial.println("Patching TSL");
@@ -434,8 +410,7 @@ void translate(){
       int targetOffset = thumb_offsets[(i+2)%8];
       int patch_offset = thumb_b_patch_points[i];
       int relativeJump = (targetOffset - patch_offset -3)>>1;
-      translated_program[patch_offset>>1] = encode_thumb_16(THUMB_B_1, THUMB_COND_LT, relativeJump); // If flags[LT] then PC <= PC + relativeJump
-      curThumbOffset += 2;
+      thumb_asm_patch(encode_thumb_16(THUMB_B_1, THUMB_COND_LT, relativeJump), patch_offset); // If flags[LT] then PC <= PC + relativeJump
     }
     if (thisC88Instr == C88_TSE){
       Serial.println("Patching TSE");
@@ -443,8 +418,7 @@ void translate(){
       int targetOffset = thumb_offsets[(i+2)%8];
       int patch_offset = thumb_b_patch_points[i];
       int relativeJump = (targetOffset - patch_offset -3)>>1;
-      translated_program[patch_offset>>1] = encode_thumb_16(THUMB_B_1, THUMB_COND_EQ, relativeJump); // If flags[Z] then PC <= PC + relativeJump
-      curThumbOffset += 2;
+      thumb_asm_patch(encode_thumb_16(THUMB_B_1, THUMB_COND_EQ, relativeJump), patch_offset); // If flags[Z] then PC <= PC + relativeJump
     }
     if (thisC88Instr == C88_TSI){
       Serial.println("Patching TSI");
@@ -452,8 +426,7 @@ void translate(){
       int targetOffset = thumb_offsets[(i+2)%8];
       int patch_offset = thumb_b_patch_points[i];
       int relativeJump = (targetOffset - patch_offset -3)>>1;
-      translated_program[patch_offset>>1] = encode_thumb_16(THUMB_B_1, THUMB_COND_NE, relativeJump); // If !flags[Z] then PC <= PC + relativeJump
-      curThumbOffset += 2;
+      thumb_asm_patch(encode_thumb_16(THUMB_B_1, THUMB_COND_NE, relativeJump), patch_offset); // If !flags[Z] then PC <= PC + relativeJump
     }
   }
 
