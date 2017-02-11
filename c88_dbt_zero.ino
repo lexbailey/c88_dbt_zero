@@ -303,9 +303,10 @@ void setup() {
   */
 
   user_program[0] = 0b11100000;
-  user_program[1] = 0b01100000;
-  user_program[2] = 0b01111000;
-  user_program[3] = 0b00011000;
+  user_program[1] = 0b00010111;
+  user_program[2] = 0b11101000;
+  user_program[3] = 0b00000111;
+  user_program[4] = 0b01000000;
   
   
   Serial.println("Translate...");
@@ -366,6 +367,12 @@ void translate(){
       Serial.println("LOAD");
       // LOAD a | Load contents of memory at a to register
       thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R0, ARM_R3, thisC88Operand)); // R0 <= mem[a]
+    }
+
+    if (thisC88Instr == C88_STORE){
+      Serial.println("STORE");
+      // STORE a | Store register value at memory address a
+      thumb_asm(encode_thumb_16(THUMB_STRB_imm_1, ARM_R0, ARM_R3, thisC88Operand)); // mem[a] <= R0
     }
 
     if ((thisC88Instr == C88_ADD) || (thisC88Instr == C88_ADDU)){
@@ -604,7 +611,18 @@ volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, 
     "  mov  r4, #1   \n" // r4 <= 1
     "  orr  r5, r4   \n" // r5 <= target | 1 (r5 is the target with the thumb bit set)
     "  blx  r5       \n" // A return from this call happens for stop instructions
-    "  bx   r2       \n"
+                         // however, this code path may be skipped when returning to
+                         // the DBT main loop. Is this a tail call? Maybe! This function
+                         // Doesn't allocate any stack space, so it's safe to let the
+                         // translated program return to the DBT directly. When the
+                         // translated program does a stop instruction however, this
+                         // is not a tail call at all. Control returns here...
+    "  bx   r2       \n" // And this bx takes us back to the DBT main loop.
+                         // Why two different paths? Well, it's just arbitrary really.
+                         // It felt like a good idea to have the STOP path be a little
+                         // more final and to allow it to execute without needing the
+                         // supervisor in the way if all it would be doing is setting
+                         // the return address to something we already know.
   );
   // IMPORTANT NOTE: R0, R1 and R3 are not touched by this code.
   // By making use of the calling convention, these registers allready contain
