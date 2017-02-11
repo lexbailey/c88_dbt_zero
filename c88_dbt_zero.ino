@@ -72,6 +72,11 @@
 #define SVC_EXIT_PROGRAM   0 // Handy for testing, just so I don't have to insert a branch to the exit function
 #define SVC_SELF_TEST      1
 #define SVC_REGULATE_SPEED 2
+#define SVC_SET_STOP       3
+#define SVC_IO_READ        4
+#define SVC_IO_WRITE       5
+#define SVC_IO_CLEAR       6
+#define SVC_IO_SWAP        7
 
 bool supervisorTestComplete = false;
 
@@ -92,7 +97,7 @@ volatile uint16_t *translated_program;
 // Offset into the translated program that represents where the C88 PC is now
 uint32_t translated_pc_offset = 0;
 
-bool isRun = false;
+bool isRunning = false;
 
 const int C88_CONFIG_SPEED_SLOW = 1;
 const int C88_CONFIG_SPEED_FAST = 2;
@@ -100,6 +105,16 @@ const int C88_CONFIG_SPEED_FULL = 3;
 
 int runSpeed = C88_CONFIG_SPEED_SLOW;
 
+int stopCode = 0;
+
+
+uint32_t c88_reg = 0;
+uint32_t c88_io_reg = 0;
+
+
+// WARNING! The Arduino IDE does some nasty stuff with automatically adding forward declarations
+// for things. This seems to fall over spectacularly when there is a C++ function defined before
+// this extern "C" block. Don't define any functions above this line.
 extern "C"{
   // Supervisor handler must be in an extern "C" block to prevent name mangling.
   // Name mangling would prevent the SVC_Handler inline ASM from finding the supervisor symbol.
@@ -139,6 +154,43 @@ extern "C"{
       
       return;
       exit(1);
+    }
+    if (svc_number == SVC_NUMBER(SVC_SET_STOP)){
+      Serial.println("Supervisor: set stop code");
+      uint32_t R1 = svc_args[1];
+      stopCode = R1;
+      isRunning = false;
+      return;
+    }
+
+    if (svc_number == SVC_NUMBER(SVC_IO_READ)){
+      Serial.println("Supervisor: IO Read");
+      svc_args[0] = readIO();
+      return;
+    }
+
+    if (svc_number == SVC_NUMBER(SVC_IO_WRITE)){
+      Serial.println("Supervisor: IO Write");
+      uint32_t R0 = svc_args[0];
+      Serial.print("Write to IO: 0x"); Serial.println(R0, HEX);
+      c88_io_reg = R0;
+      return;
+    }
+
+    if (svc_number == SVC_NUMBER(SVC_IO_CLEAR)){
+      Serial.println("Supervisor: IO Clear");
+      Serial.println("Write to IO: 0x00");
+      c88_io_reg = 0;
+      return;
+    }
+
+    if (svc_number == SVC_NUMBER(SVC_IO_SWAP)){
+      uint32_t R0 = svc_args[0];
+      svc_args[0] = readIO();
+      Serial.println("Supervisor: IO Swap");
+      Serial.print("Write to IO: 0x"); Serial.println(R0);
+      c88_io_reg = R0;
+      return;
     }
   }
 }
@@ -203,6 +255,12 @@ void HardFault_Handler(void){
   );
 }
 
+uint32_t readIO(){
+  // Currently there is no way to do external IO.
+  // This function simulates wiring the IO output to the IO input.
+  return c88_io_reg;
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("C88_DBT_Zero");
@@ -221,7 +279,7 @@ void setup() {
 
   translated_program = (uint16_t *)malloc(sizeof(uint16_t) * MAX_TRANSLATED_LENGTH);
   
-  isRun = false;
+  isRunning = false;
   /*
   user_program[0] = 0b00000111;
   user_program[1] = 0b10001110;
@@ -245,9 +303,10 @@ void setup() {
   */
 
   user_program[0] = 0b11100000;
-  user_program[1] = 0b11110000;
-  user_program[2] = 0b01000001;
-
+  user_program[1] = 0b01100000;
+  user_program[2] = 0b01111000;
+  user_program[3] = 0b00011000;
+  
   
   Serial.println("Translate...");
   translate();
@@ -255,7 +314,7 @@ void setup() {
   showTranslatedProgram();
   
   runSpeed = C88_CONFIG_SPEED_SLOW;
-  isRun = true;
+  isRunning = true;
 }
 
 uint16_t encode_thumb_16(THUMB16_t instruction, ...){
@@ -396,6 +455,37 @@ void translate(){
       thumb_asm(encode_thumb_16(THUMB_LSR_imm_1, ARM_R0, ARM_R0, thisC88Operand)); // R0 <= R0 >> a
     }
 
+    if (thisC88Instr == C88_IOW){
+      Serial.println("IOW");
+      // IOW | Write the register value to the output port
+      thumb_asm(encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_IO_WRITE))); // (Supervisor call)
+    }
+
+    if (thisC88Instr == C88_IOR){
+      Serial.println("IOR");
+      // IOR | Copy the value on the input port to the register
+      thumb_asm(encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_IO_READ))); // (Supervisor call)
+    }
+
+    if (thisC88Instr == C88_IOS){
+      Serial.println("IOS");
+      // IOS | Write the value of the register to the output port and, simultaneously, copy
+      // the input port value to the register.
+      thumb_asm(encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_IO_SWAP))); // (Supervisor call)
+    }
+
+    if (thisC88Instr == C88_IOC){
+      Serial.println("IOC");
+      // IOC | Set the output port to 0
+      thumb_asm(encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_IO_CLEAR))); // (Supervisor call)
+    }
+
+    // For debugging (slower run speeds) insert supervisor calls after each instruction.
+    if (runSpeed != C88_CONFIG_SPEED_FULL){
+      Serial.println("t-SVC (Speed limiter)");
+      thumb_asm(encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_REGULATE_SPEED))); // (Supervisor call)
+    }
+
     if ((thisC88Instr == C88_TSG)||
         (thisC88Instr == C88_TSL)||
         (thisC88Instr == C88_TSE)||
@@ -410,12 +500,6 @@ void translate(){
       thumb_asm(encode_thumb_16(THUMB_NOP));
     }
 
-    // For debugging (slower run speeds) insert supervisor calls after each instruction.
-    if (runSpeed != C88_CONFIG_SPEED_FULL){
-      Serial.println("t-SVC (Speed limiter)");
-      thumb_asm(encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_REGULATE_SPEED))); // (Supervisor call)
-    }
-
     if (thisC88Instr == C88_JMP){
       Serial.println("JMP");
       // JMP a | Jump to address a.
@@ -424,6 +508,17 @@ void translate(){
       // We just need one sixteen bit instruction of space
       thumb_b_patch_points[i] = curThumbOffset;
       thumb_asm(encode_thumb_16(THUMB_NOP));
+    }
+
+    if (thisC88Instr == C88_STOP){
+      Serial.println("STOP");
+      // STOP | Stop the program, the operand is discarded on the C88, but is
+      // logged by this DBT, just because it can and it might be useful.
+      // The return code is set and then a BX to the link register takes us back
+      // to the DBT main loop via the helper function.
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1, ARM_R1, thisC88Operand  )); // R1 <= a
+      thumb_asm(encode_thumb_16(THUMB_SVC_1,     SVC_NUMBER(SVC_SET_STOP))); // (Supervisor call)
+      thumb_asm(encode_thumb_16(THUMB_BX_1,      ARM_LR                  )); // BX LR
     }
   }
 
@@ -509,49 +604,58 @@ volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, 
     "  mov  r4, #1   \n" // r4 <= 1
     "  orr  r5, r4   \n" // r5 <= target | 1 (r5 is the target with the thumb bit set)
     "  blx  r5       \n" // A return from this call happens for stop instructions
-    "  bx   lr       \n"
+    "  bx   r2       \n"
   );
   // IMPORTANT NOTE: R0, R1 and R3 are not touched by this code.
   // By making use of the calling convention, these registers allready contain
   // the values that the translated program expects.
 }
 
-uint32_t c88_reg = 0;
 
 volatile void dbt_loop(){
   //Serial.println("Translated program:");
   //showTranslatedProgram();
-  Serial.println("Running program");
-  
-  volatile uint32_t R0 = c88_reg;
-  volatile uint32_t R1 = 0;
-  volatile uint16_t *target = translated_program + translated_pc_offset;
-  volatile uint8_t  *originalProgram = user_program;
-  Serial.print("From address: 0x");Serial.println((uint32_t)target, HEX);
-  // This function will call the translated program after setting the registers
-  call_translated_program(R0, R1, target, originalProgram);
-  //exit(1);
-  asm("":::"lr", "r2", "r3", "r4");// does this work? if so why?
-  // Now we need to extract the R0 and R1 values before anything else has a chance to
-  // clobber them. This is probably safe, as nothing should happen after the translated
-  // program returns before we do this.
-  // This wastes registers a little, but it's the easiest way.
-  asm(
-    "mov %[out_r0], r0 \n"
-    "mov %[out_r1], r1 \n"
-    : [out_r0] "=r" (R0), [out_r1] "=r" (R1)
-    ::
-  );
 
-  c88_reg = R0 & 0xff;
+  if (isRunning){
+    Serial.println("Running program");
+    
+    volatile uint32_t R0 = c88_reg;
+    volatile uint32_t R1 = 0;
+    volatile uint16_t *target = translated_program + translated_pc_offset;
+    volatile uint8_t  *originalProgram = user_program;
+    Serial.print("From address: 0x");Serial.println((uint32_t)target, HEX);
+    // This function will call the translated program after setting the registers
+    call_translated_program(R0, R1, target, originalProgram);
+    //exit(1);
+    asm("":::"r2", "r3", "r4", "r5");// does this work? if so why?
+    // Now we need to extract the R0 value before anything else has a chance to
+    // clobber them. This is probably safe, as nothing should happen after the translated
+    // program returns before we do this.
+    // This wastes a register, but it's the easiest way.
+    asm(
+      "mov %[out_r0], r0 \n"
+      : [out_r0] "=r" (R0)
+      ::
+    );
+    // TODO, is the above doable by using the result of the function call?
   
-  Serial.print("R0: "); Serial.println(R0);
-  Serial.print("R1: "); Serial.println(R1);
-  delay(1000);
+    c88_reg = R0;
+  
+    if (!isRunning){
+      Serial.print("STOP instruction encountered, return code was: ");
+      Serial.println(stopCode);
+    }
+    
+    Serial.print("R0:  "); Serial.println(R0);
+    Serial.print("R1:  "); Serial.println(R1);
 
-  if (c88_reg > 256){
-    exit(1);
+    Serial.print("In:  "); Serial.println(readIO());
+    Serial.print("Out: "); Serial.println(c88_io_reg);
   }
+  else{
+    Serial.println("(idle)");
+  }
+  delay(1000);
 }
 
 void loop() {
