@@ -27,6 +27,9 @@
  *  The DBT will also set R1 to zero and expect it to be non-zero upon return if
  *  the program is to stop as a result of a C88 STOP instruction.
  *  
+ *  R1 is also used by the SELFMOD_MARK supervisor call. The caller should reset
+ *  R1 after the call.
+ *  
  *  There is also a need for the C88 program to access the untranslated version of
  *  itself. The base pointer to the original C88 program is therefore placed in R3.
  *  This allows use of LDRB Rt, [R3, #n] to get the nth byte of the C88 program
@@ -69,14 +72,17 @@
 #define SVC_NUMBER(x) (x)
 #define SVC_STRING_SUB(x) #x
 #define SVC_STRING(x) SVC_STRING_SUB(x)
-#define SVC_EXIT_PROGRAM   0 // Handy for testing, just so I don't have to insert a branch to the exit function
-#define SVC_SELF_TEST      1
-#define SVC_REGULATE_SPEED 2
-#define SVC_SET_STOP       3
-#define SVC_IO_READ        4
-#define SVC_IO_WRITE       5
-#define SVC_IO_CLEAR       6
-#define SVC_IO_SWAP        7
+
+#define SVC_EXIT_PROGRAM    0 // Handy for testing, just so I don't have to insert a branch to the exit function
+#define SVC_SELF_TEST       1 // Used to test that the SVC handler is working before the DBT starts
+#define SVC_REGULATE_SPEED  2 // Causes a delay according to the current speed setting
+#define SVC_SET_STOP        3 // Sets the stop code
+#define SVC_IO_READ         4 // Reads the IO in into the register
+#define SVC_IO_WRITE        5 // Writes the register to the IO out
+#define SVC_IO_CLEAR        6 // Sets the IO out to 0
+#define SVC_IO_SWAP         7 // Alias for Write followed by Read
+#define SVC_SELFMOD_MARK    8 // Mark a line that has been modified
+#define SVC_SELFMOD_REACHED 9 // A line marked with SVC_SELFMOD_MARK has been reached.
 
 bool supervisorTestComplete = false;
 
@@ -192,6 +198,30 @@ extern "C"{
       c88_io_reg = R0;
       return;
     }
+
+    if (svc_number == SVC_NUMBER(SVC_SELFMOD_MARK)){
+      Serial.println("Supervisor: Mark self-modified code");
+      // Mark a line of code as being self-modified by injecting an SVC_SELFMOD_REACHED call
+      uint32_t R1 = svc_args[1];
+      translated_program[thumb_offsets[R1]] = encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_SELFMOD_REACHED));
+      return;
+    }
+
+    if (svc_number == SVC_NUMBER(SVC_SELFMOD_REACHED)){
+      Serial.println("Supervisor: Reached self-modified code, must retranslate");
+      // A self-modified line has been reached, retranslate
+      uint32_t PC = svc_args[6];
+      translated_pc_offset = (uint32_t)((uint16_t *)PC - translated_program);
+      for (int i = 0; i<= 7; i++){
+        if (translated_pc_offset == thumb_offsets[i]){
+          int restart_address = i;
+          translate_from(i); // This might update thumb_offsets
+          // Get the new pc offset value after the [partial] retranslation
+          translated_pc_offset = thumb_offsets[i];
+        }
+      }
+      return;
+    }
   }
 }
 
@@ -241,6 +271,7 @@ extern "C"{
   }
 }
 
+void HardFault_Handler(void) __attribute__ ((naked));
 void HardFault_Handler(void){
   asm volatile(
     "  movs R0, #4           \n"
@@ -302,11 +333,14 @@ void setup() {
   user_program[7] = 0b01000101;
   */
 
-  user_program[0] = 0b11100000;
-  user_program[1] = 0b00010111;
-  user_program[2] = 0b11101000;
-  user_program[3] = 0b00000111;
-  user_program[4] = 0b01000000;
+  user_program[0] = 0b00000111;
+  user_program[1] = 0b00010010;
+  user_program[2] = 0b11100000;
+  user_program[3] = 0b11100000;
+  user_program[4] = 0b11100000;
+  user_program[5] = 0b11100000;
+  user_program[6] = 0b11100000;
+  user_program[7] = 0b00011000;
   
   
   Serial.println("Translate...");
@@ -346,10 +380,10 @@ void thumb_asm_patch(uint16_t instr, int offset){
   translated_program[offset >> 1] = instr;
 }
 
-void translate(){
+void translate_from(int start){
   int i;
-  curThumbOffset = 0;
-  for (i =0; i<= 7; i++){
+  curThumbOffset = thumb_offsets[start];
+  for (i = start; i<= 7; i++){
     uint8_t thisC88Instr   = user_program[i] & 0b11111000;
     uint8_t thisC88Operand = user_program[i] & 0b00000111;
     thumb_offsets[i] = curThumbOffset;
@@ -373,6 +407,7 @@ void translate(){
       Serial.println("STORE");
       // STORE a | Store register value at memory address a
       thumb_asm(encode_thumb_16(THUMB_STRB_imm_1, ARM_R0, ARM_R3, thisC88Operand)); // mem[a] <= R0
+      thumb_asm(encode_thumb_16(THUMB_SVC_1,      SVC_NUMBER(SVC_SELFMOD_MARK)));   // Supervisor
     }
 
     if ((thisC88Instr == C88_ADD) || (thisC88Instr == C88_ADDU)){
@@ -584,6 +619,14 @@ void translate(){
     }
   }
 
+}
+
+
+void translate(){
+  // Full retranslation.
+  // Set the base offset to 0
+  thumb_offsets[0] = 0; // This should never become non-zero anyway
+  translate_from(0);
 }
 
 void showTranslatedProgram(){
