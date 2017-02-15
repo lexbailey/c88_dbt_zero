@@ -83,6 +83,7 @@
 #define SVC_IO_SWAP         7 // Alias for Write followed by Read
 #define SVC_SELFMOD_MARK    8 // Mark a line that has been modified
 #define SVC_SELFMOD_REACHED 9 // A line marked with SVC_SELFMOD_MARK has been reached.
+#define SVC_DIVIDE         10 // Divide R0 by R1, result in R0
 
 bool supervisorTestComplete = false;
 
@@ -159,7 +160,9 @@ extern "C"{
       //translated_pc_offset = (uint32_t)((uint16_t *)PC - translated_program);
 
       translated_pc_offset = (PC - (uint32_t)translated_program);
-      
+
+      // This is a horrible hack!
+      // This overwrites the return address the stack frame of the function that called the supervisor.
       svc_args[6] = R2;
       
       return;
@@ -238,6 +241,13 @@ extern "C"{
       }
       Serial.println("Supervisor: Invalid SELFMOD_REACHED call");
       exit(1);
+    }
+
+    if (svc_number == SVC_NUMBER(SVC_DIVIDE)){
+      Serial.println("Supervisor: Divide");
+      uint32_t R0 = svc_args[0];
+      uint32_t R1 = svc_args[1];
+      svc_args[0] = R0 / R1;
     }
   }
 }
@@ -350,14 +360,10 @@ void setup() {
   user_program[7] = 0b01000101;
   */
 
-  user_program[0] = 0b11100000;
-  user_program[1] = 0b00110100;
-  user_program[2] = 0b01000000;
-  user_program[3] = 0b00001111;
-  user_program[4] = 0b00001000;
-  user_program[5] = 0b00001111;
-  user_program[6] = 0b01000000;
-  user_program[7] = 0b11101000;
+  user_program[0] = 0b00000111;
+  user_program[1] = 0b11111110;
+  user_program[2] = 0b00011000;
+  user_program[7] = 12;
   
   
   Serial.println("Translate...");
@@ -480,6 +486,27 @@ void translate_from(int start){
       thumb_asm(encode_thumb_16(THUMB_SXTB_1,     ARM_R0, ARM_R0 )); // R0 <= SignExt(R0[7:0])
       thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R4, 2      )); // R4 <= 2
       thumb_asm(encode_thumb_16(THUMB_MUL_1,      ARM_R0, ARM_R4 )); // R0 <= R0 * R4
+    }
+
+    if ((thisC88Instr == C88_DIV) || (thisC88Instr == C88_MULU)){
+      Serial.println("DIV[U]");
+      // DIV [u] | Divide register by mem[a]
+      // Sanitize R0 so it is sign extended
+      thumb_asm(encode_thumb_16(THUMB_SXTB_1,     ARM_R0, ARM_R0                )); // R0 <= SignExt(R0[7:0])
+      thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R1, ARM_R3, thisC88Operand)); // R1 <= mem[a]
+      thumb_asm(encode_thumb_16(THUMB_SXTB_1,     ARM_R1, ARM_R1                )); // R1 <= SignExt(R1[7:0])
+      thumb_asm(encode_thumb_16(THUMB_SVC_1,      SVC_NUMBER(SVC_DIVIDE)        )); // SVC divide
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R1, 0                     )); // R1 <= 0
+    }
+
+    if (thisC88Instr == C88_HALF){
+      Serial.println("HALF");
+      // HALF | Half the register
+      // Sanitize R0 so it is sign extended
+      thumb_asm(encode_thumb_16(THUMB_SXTB_1,     ARM_R0, ARM_R0        )); // R0 <= SignExt(R0[7:0])
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R1, 2             )); // R1 <= 2
+      thumb_asm(encode_thumb_16(THUMB_SVC_1,      SVC_NUMBER(SVC_DIVIDE))); // SVC divide
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R1, 0             )); // R1 <= 0
     }
 
     if (thisC88Instr == C88_SHL){
