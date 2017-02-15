@@ -98,6 +98,10 @@ const uint16_t  THUMB_MOV_imm_1_masks[]  = {0b0000011100000000, 0b00000000111111
 const int       THUMB_MOV_imm_1_shifts[] = {         8        ,                  0};
 const THUMB16_t THUMB_MOV_imm_1          = {0b0010000000000000, 2, THUMB_MOV_imm_1_masks, THUMB_MOV_imm_1_shifts};
 
+const uint16_t  THUMB_MOV_2_masks[]  = {0b0000000000000111, 0b0000000000111000};
+const int       THUMB_MOV_2_shifts[] = {                 0,               3   };
+const THUMB16_t THUMB_MOV_2          = {0b0000000000000000, 2, THUMB_MOV_2_masks, THUMB_MOV_2_shifts};
+
 const uint16_t  THUMB_AND_ORR_1_masks[] = {0b0000000000000111, 0b00000000000111000};
 const int       THUMB_AND_ORR_1_shifts[]= {                 0,                3   };
 const THUMB16_t THUMB_AND_1             = {0b0100000000000000, 2, THUMB_AND_ORR_1_masks, THUMB_AND_ORR_1_shifts};

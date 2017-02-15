@@ -117,6 +117,8 @@ int stopCode = 0;
 uint32_t c88_reg = 0;
 uint32_t c88_io_reg = 0;
 
+int retranslate_required_from = -1;
+
 
 // WARNING! The Arduino IDE does some nasty stuff with automatically adding forward declarations
 // for things. This seems to fall over spectacularly when there is a C++ function defined before
@@ -154,7 +156,9 @@ extern "C"{
       Serial.print("Supervisor: R2: 0x"); Serial.println(R2, HEX);
       Serial.print("Supervisor: PC: 0x"); Serial.println(PC, HEX);
 
-      translated_pc_offset = (uint32_t)((uint16_t *)PC - translated_program);
+      //translated_pc_offset = (uint32_t)((uint16_t *)PC - translated_program);
+
+      translated_pc_offset = (PC - (uint32_t)translated_program);
       
       svc_args[6] = R2;
       
@@ -203,7 +207,13 @@ extern "C"{
       Serial.println("Supervisor: Mark self-modified code");
       // Mark a line of code as being self-modified by injecting an SVC_SELFMOD_REACHED call
       uint32_t R1 = svc_args[1];
-      translated_program[thumb_offsets[R1]] = encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_SELFMOD_REACHED));
+      uint32_t offset = (uint32_t)thumb_offsets[R1];
+      Serial.print("Supervisor: C88 offset is: "); Serial.println(R1);
+      Serial.print("Supervisor: Thumb offset is: 0x"); Serial.println(thumb_offsets[R1], HEX);
+      Serial.print("Supervisor: Translated program starts at: 0x"); Serial.println((uint32_t)translated_program, HEX);
+      Serial.print("Supervisor: Overwrite address: 0x"); Serial.println((uint32_t)translated_program + offset, HEX);
+      uint16_t *targetInstruction = (uint16_t *)(((uint32_t)translated_program) + offset);
+      *targetInstruction = encode_thumb_16(THUMB_SVC_1, SVC_NUMBER(SVC_SELFMOD_REACHED));
       return;
     }
 
@@ -211,16 +221,23 @@ extern "C"{
       Serial.println("Supervisor: Reached self-modified code, must retranslate");
       // A self-modified line has been reached, retranslate
       uint32_t PC = svc_args[6];
-      translated_pc_offset = (uint32_t)((uint16_t *)PC - translated_program);
+      translated_pc_offset = (uint32_t)(PC - (uint32_t)translated_program) - 2;
+
+      Serial.print("Supervisor: PC: 0x"); Serial.println(PC, HEX);
+      Serial.print("Supervisor: translated_pc_offset: 0x"); Serial.println(translated_pc_offset, HEX);
+      
       for (int i = 0; i<= 7; i++){
+        Serial.print("Supervisor: check offset: 0x"); Serial.println(thumb_offsets[i], HEX);  
         if (translated_pc_offset == thumb_offsets[i]){
           int restart_address = i;
-          translate_from(i); // This might update thumb_offsets
-          // Get the new pc offset value after the [partial] retranslation
-          translated_pc_offset = thumb_offsets[i];
+          retranslate_required_from = i;
+          uint32_t R2 = svc_args[2];
+          svc_args[6] = R2;
+          return;
         }
       }
-      return;
+      Serial.println("Supervisor: Invalid SELFMOD_REACHED call");
+      exit(1);
     }
   }
 }
@@ -333,14 +350,14 @@ void setup() {
   user_program[7] = 0b01000101;
   */
 
-  user_program[0] = 0b00000111;
-  user_program[1] = 0b00010010;
-  user_program[2] = 0b11100000;
-  user_program[3] = 0b11100000;
-  user_program[4] = 0b11100000;
-  user_program[5] = 0b11100000;
-  user_program[6] = 0b11100000;
-  user_program[7] = 0b00011000;
+  user_program[0] = 0b11100000;
+  user_program[1] = 0b00110100;
+  user_program[2] = 0b01000000;
+  user_program[3] = 0b00001111;
+  user_program[4] = 0b00001000;
+  user_program[5] = 0b00001111;
+  user_program[6] = 0b01000000;
+  user_program[7] = 0b11101000;
   
   
   Serial.println("Translate...");
@@ -407,7 +424,20 @@ void translate_from(int start){
       Serial.println("STORE");
       // STORE a | Store register value at memory address a
       thumb_asm(encode_thumb_16(THUMB_STRB_imm_1, ARM_R0, ARM_R3, thisC88Operand)); // mem[a] <= R0
-      thumb_asm(encode_thumb_16(THUMB_SVC_1,      SVC_NUMBER(SVC_SELFMOD_MARK)));   // Supervisor
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R1, thisC88Operand));         // R1 <= a
+      thumb_asm(encode_thumb_16(THUMB_SVC_1,      SVC_NUMBER(SVC_SELFMOD_MARK)));   // Supervisor mark selfmod
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R1, 0));                      // R1 <= 0
+    }
+
+    if (thisC88Instr == C88_SWAP){
+      Serial.println("SWAP");
+      // SWAP a | Swap register value with memory address a
+      thumb_asm(encode_thumb_16(THUMB_MOV_2,      ARM_R1, ARM_R0)); // R1 <= R0
+      thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R0, ARM_R3, thisC88Operand)); // R0 <= mem[a]
+      thumb_asm(encode_thumb_16(THUMB_STRB_imm_1, ARM_R1, ARM_R3, thisC88Operand)); // mem[a] <= R1
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R1, thisC88Operand));         // R1 <= a
+      thumb_asm(encode_thumb_16(THUMB_SVC_1,      SVC_NUMBER(SVC_SELFMOD_MARK)));   // Supervisor mark selfmod
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R1, 0));                      // R1 <= 0
     }
 
     if ((thisC88Instr == C88_ADD) || (thisC88Instr == C88_ADDU)){
@@ -534,8 +564,10 @@ void translate_from(int start){
         (thisC88Instr == C88_TSI)){
       Serial.println("TSx");
       // TSx a | Skip the next instruction if mem[a] meets some condition
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R4, 0xFF));                   // R4 <= 0xFF
+      thumb_asm(encode_thumb_16(THUMB_AND_1,      ARM_R0, ARM_R4));                 // R0 <= R0 & R4
       thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand)); // R4 <= mem[a]
-      thumb_asm(encode_thumb_16(THUMB_CMP_1, ARM_R4, ARM_R0)); // flags = flags_for("R4 - R0")
+      thumb_asm(encode_thumb_16(THUMB_CMP_1,      ARM_R4, ARM_R0));                 // flags = flags_for("R4 - R0")
       // Just like the JMP instruction, this will need patching as we don't
       // know how far to jump yet
       thumb_b_patch_points[i] = curThumbOffset;
@@ -682,7 +714,8 @@ volatile void dbt_loop(){
     
     volatile uint32_t R0 = c88_reg;
     volatile uint32_t R1 = 0;
-    volatile uint16_t *target = translated_program + translated_pc_offset;
+    //volatile uint16_t *target = translated_program + translated_pc_offset;
+    volatile uint16_t *target = (uint16_t*)((uint32_t)translated_program + translated_pc_offset);
     volatile uint8_t  *originalProgram = user_program;
     Serial.print("From address: 0x");Serial.println((uint32_t)target, HEX);
     // This function will call the translated program after setting the registers
@@ -712,11 +745,22 @@ volatile void dbt_loop(){
 
     Serial.print("In:  "); Serial.println(readIO());
     Serial.print("Out: "); Serial.println(c88_io_reg);
+
+    if (retranslate_required_from >= 0){
+      Serial.println("Retranslating...");
+      translate_from(retranslate_required_from);
+      // Get the new pc offset value after the [partial] retranslation
+      translated_pc_offset = thumb_offsets[retranslate_required_from];
+      retranslate_required_from = -1;
+      Serial.println("Retranslation done");
+    }
+    
   }
   else{
     Serial.println("(idle)");
   }
-  delay(1000);
+
+  delay(100);
 }
 
 void loop() {
