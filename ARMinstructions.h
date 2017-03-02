@@ -115,4 +115,11 @@ const uint16_t  THUMB_SXTB_1_masks[] = {0b0000000000000111, 0b00000000000111000}
 const int       THUMB_SXTB_1_shifts[]= {                 0,                3   };
 const THUMB16_t THUMB_SXTB_1         = {0b1011001001000000, 2, THUMB_SXTB_1_masks, THUMB_SXTB_1_shifts};
 
+const uint16_t  THUMB_LDR_lit_1_masks[] = {0b0000011100000000, 0b00000000011111111};
+const int       THUMB_LDR_lit_1_shifts[]= {         8        ,                   0};
+const THUMB16_t THUMB_LDR_lit_1         = {0b0100100000000000, 2, THUMB_LDR_lit_1_masks, THUMB_LDR_lit_1_shifts};
+
+const uint16_t  THUMB_LDR_reg_1_masks[] = {0b0000000000000111, 0b00000000000111000, 0b0000000111000000};
+const int       THUMB_LDR_reg_1_shifts[]= {                 0,                3   ,            6      };
+const THUMB16_t THUMB_LDR_reg_1         = {0b0101100000000000, 3, THUMB_LDR_reg_1_masks, THUMB_LDR_reg_1_shifts};
 #endif //ARM_INSTRUCTIONS_INCLUDE

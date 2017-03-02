@@ -1,4 +1,3 @@
-
 /*
  * C88 DBT program. For running C88 programs on an ARM Cortex M device. 
  * Should support all M devices, only tested on M0+.
@@ -51,6 +50,7 @@
 
 #include <stdarg.h>
 #include <stdint.h>
+#include <LedControl.h>
 #include "c88instructions.h"
 #include "ARMinstructions.h"
 
@@ -84,6 +84,8 @@
 #define SVC_SELFMOD_MARK    8 // Mark a line that has been modified
 #define SVC_SELFMOD_REACHED 9 // A line marked with SVC_SELFMOD_MARK has been reached.
 #define SVC_DIVIDE         10 // Divide R0 by R1, result in R0
+
+LedControl screen=LedControl(12,11,10,1);
 
 bool supervisorTestComplete = false;
 
@@ -319,6 +321,12 @@ uint32_t readIO(){
   return c88_io_reg;
 }
 
+void updateScreen(){
+  for (int i = 0; i<= 7; i++){
+    screen.setRow(0,i, user_program[i]);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("C88_DBT_Zero");
@@ -349,7 +357,8 @@ void setup() {
   user_program[7] = 0b00000010;
   */
 
-/* //CYLON
+ //CYLON
+ /*
   user_program[0] = 0b01000001;
   user_program[1] = 0b00000001;
   user_program[2] = 0b10100001;
@@ -360,10 +369,10 @@ void setup() {
   user_program[7] = 0b01000101;
   */
 
-  user_program[0] = 0b00000111;
-  user_program[1] = 0b11111110;
-  user_program[2] = 0b00011000;
-  user_program[7] = 12;
+  user_program[0] = 0b01001111;
+  user_program[1] = 0b00000000;
+  user_program[2] = 0b01000000;
+  user_program[7] = 0b00011001;
   
   
   Serial.println("Translate...");
@@ -373,6 +382,11 @@ void setup() {
   
   runSpeed = C88_CONFIG_SPEED_SLOW;
   isRunning = true;
+
+  screen.setIntensity(0,8);
+  screen.clearDisplay(0);
+  screen.shutdown(0,false);
+  updateScreen();
 }
 
 uint16_t encode_thumb_16(THUMB16_t instruction, ...){
@@ -611,6 +625,41 @@ void translate_from(int start){
       thumb_asm(encode_thumb_16(THUMB_NOP));
     }
 
+    if (thisC88Instr == C88_JMA){
+      Serial.println("JMA");
+      // JMA a | Jump to address stored at memory location a.
+      // This jump can't be inserted as a single instruction in the patch-up stage
+      // because the jump location isn't known ahead of time. Instead the translated
+      // code calculates the address by looking at the thumb offset table.
+      // This requires a literal value to be inserted into the code.
+      thumb_asm(encode_thumb_16(THUMB_LDRB_imm_1, ARM_R4, ARM_R3, thisC88Operand)); // R4 <= mem[a]
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R1, 0x07                  )); // R1 <= 0x07
+      thumb_asm(encode_thumb_16(THUMB_AND_1,      ARM_R4, ARM_R1                )); // R4 <= R4 & R1
+      thumb_asm(encode_thumb_16(THUMB_LSL_imm_1,  ARM_R4, ARM_R4, 2             )); // R4 <= R4 << 2
+
+      // Next we need to insert a literal load, which means calculating where the literal will go now.
+      int literalDistance = 2;
+      uint32_t nextPC = (uint32_t)translated_program + (uint32_t)curThumbOffset;
+      uint32_t nextPCAligned = nextPC &~3;
+      boolean padding_required = nextPC != nextPCAligned;
+      if (padding_required){
+        literalDistance += 1;
+      }
+      thumb_asm(encode_thumb_16(THUMB_LDR_lit_1,  ARM_R1, literalDistance       )); // R1 <= thumb_offsets
+      thumb_asm(encode_thumb_16(THUMB_LDR_reg_1,  ARM_R4, ARM_R1, ARM_R4        )); // R4 <= R1[R4]
+      thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R1, 0                     )); // R1 <= 0
+      thumb_asm(encode_thumb_16(THUMB_BX_1,       ARM_R4                        )); // PC <= R4
+      // Now we can insert the literal, but we need to make sure that it's word-aligned
+      if (padding_required){
+        thumb_asm(0); // Add one halfword to pad to word-alignment
+      }
+      uint16_t literalLow = (uint16_t)((uint32_t)thumb_offsets & 0xffff);
+      uint16_t literalHigh = (uint16_t)((uint32_t)thumb_offsets >> 16);
+      thumb_asm(literalHigh);
+      thumb_asm(literalLow);
+      
+    }
+
     if (thisC88Instr == C88_STOP){
       Serial.println("STOP");
       // STOP | Stop the program, the operand is discarded on the C88, but is
@@ -792,4 +841,5 @@ volatile void dbt_loop(){
 
 void loop() {
   dbt_loop();
+  updateScreen();
 }
