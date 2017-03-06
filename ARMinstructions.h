@@ -122,4 +122,11 @@ const THUMB16_t THUMB_LDR_lit_1         = {0b0100100000000000, 2, THUMB_LDR_lit_
 const uint16_t  THUMB_LDR_reg_1_masks[] = {0b0000000000000111, 0b00000000000111000, 0b0000000111000000};
 const int       THUMB_LDR_reg_1_shifts[]= {                 0,                3   ,            6      };
 const THUMB16_t THUMB_LDR_reg_1         = {0b0101100000000000, 3, THUMB_LDR_reg_1_masks, THUMB_LDR_reg_1_shifts};
+
+// Insert a UDF into the program to cause a hardfault when the program executes.
+// This is handy if you want to inspect registers at this point, because the
+// hardfault handler will print the register values.
+const uint16_t  THUMB_UDF_1_masks[] = {0b0000000011111111};
+const int       THUMB_UDF_1_shifts[]= {0};
+const THUMB16_t THUMB_UDF_1         = {0b1101111000000000, 1, THUMB_UDF_1_masks, THUMB_UDF_1_shifts};
 #endif //ARM_INSTRUCTIONS_INCLUDE

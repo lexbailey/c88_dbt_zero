@@ -99,6 +99,8 @@ volatile uint8_t user_program[8] = {0,0,0,0,0,0,0,0};
 int thumb_offsets[8] = {0,0,0,0,0,0,0,0};
 int thumb_b_patch_points[8] = {0,0,0,0,0,0,0,0};
 
+uint16_t *thumb_branch_targets[8] = {0,0,0,0,0,0,0,0};
+
 // The translated program (thumb)
 //uint16_t translated_program[100];
 volatile uint16_t *translated_program;
@@ -676,7 +678,7 @@ void translate_from(int start){
       thumb_asm(encode_thumb_16(THUMB_LSL_imm_1,  ARM_R4, ARM_R4, 2             )); // R4 <= R4 << 2
 
       // Next we need to insert a literal load, which means calculating where the literal will go now.
-      int literalDistance = 2;
+      int literalDistance = 1;
       uint32_t nextPC = (uint32_t)translated_program + (uint32_t)curThumbOffset;
       Serial.print("PC of literal load is: 0x"); Serial.println(nextPC, HEX);
       uint32_t nextPCAligned = nextPC &~3;
@@ -685,7 +687,7 @@ void translate_from(int start){
       if (padding_required){
         literalDistance += 1;
       }
-      thumb_asm(encode_thumb_16(THUMB_LDR_lit_1,  ARM_R1, literalDistance       )); // R1 <= thumb_offsets
+      thumb_asm(encode_thumb_16(THUMB_LDR_lit_1,  ARM_R1, literalDistance       )); // R1 <= thumb_branch_targets
       thumb_asm(encode_thumb_16(THUMB_LDR_reg_1,  ARM_R4, ARM_R1, ARM_R4        )); // R4 <= R1[R4]
       thumb_asm(encode_thumb_16(THUMB_MOV_imm_1,  ARM_R1, 0                     )); // R1 <= 0
       thumb_asm(encode_thumb_16(THUMB_BX_1,       ARM_R4                        )); // PC <= R4
@@ -693,9 +695,9 @@ void translate_from(int start){
       if (padding_required){
         thumb_asm(0); // Add one halfword to pad to word-alignment
       }
-      Serial.print("Thmb offsets are stored at: 0x"); Serial.println((int)thumb_offsets, HEX);
-      uint16_t literalLow = (uint16_t)((uint32_t)thumb_offsets & 0xffff);
-      uint16_t literalHigh = (uint16_t)((uint32_t)thumb_offsets >> 16);
+      Serial.print("thumb_branch_targets are stored at: 0x"); Serial.println((int)thumb_branch_targets, HEX);
+      uint16_t literalLow = (uint16_t)((uint32_t)thumb_branch_targets & 0xffff);
+      uint16_t literalHigh = (uint16_t)((uint32_t)thumb_branch_targets >> 16);
       thumb_asm(literalLow);
       thumb_asm(literalHigh);
       
@@ -768,6 +770,15 @@ void translate_from(int start){
     }
   }
 
+  // Create a one-step lookup table for JMA instructions.
+  // It'd be better to trade some JMA latency for faster translations,
+  // because JMA is almost never used.
+  // TODO fix JMA so that it does the two lookups required, to remove
+  // the need to create this table.
+  for (int i = 0; i<= 7; i++){
+    thumb_branch_targets[i] = (uint16_t *) ((((uint32_t)translated_program) + ((uint32_t)thumb_offsets[i])) | 0x1);
+  }
+
 }
 
 
@@ -780,7 +791,7 @@ void translate(){
 
 void showTranslatedProgram(){
   #ifdef DEBUG_TRANSLATION
-  for (int i = 0; i<= 10; i++){
+  for (int i = 0; i<= 14; i++){
     Serial.print("0x");
     Serial.print((uint32_t)(translated_program + i), HEX);
     Serial.print(": 0x");
