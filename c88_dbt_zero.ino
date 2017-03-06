@@ -13,10 +13,15 @@
  *  
  *  If the translated program is to run at a speed other than full speed, there 
  *  will be an SVC instruction after each of the instructions in the translated
- *  program. This calls the supervisor, which will usually update the display and
- *  then set the return address to be the DBT's main loop and then return from
- *  supervisor handler. The DBT now does the appropriate amount of waiting before
- *  jumping back to the translated program to continue execution.
+ *  program. This calls the supervisor, which will set the return address to be
+ *  the DBT's main loop and then return from the supervisor handler.
+ *  The DBT now does the appropriate amount of waiting before jumping back to the
+ *  translated program to continue execution.
+ *  
+ *  WARNING! Because the supervisor will edit the translated program's stack frame,
+ *  the translated program must never change the stack pointer. That means no push
+ *  and pop allowed! Otherwise the supervisor might overwrite the wrong part of the
+ *  stack frame.
  *  
  *  The DBT, when calling into the translated program, will also set some other
  *  special values before it does. R2 will contain the return address for the DBT
