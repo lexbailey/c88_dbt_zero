@@ -58,6 +58,7 @@
 #include <LedControl.h>
 #include "c88instructions.h"
 #include "ARMinstructions.h"
+#include "inputs.h"
 
 #ifndef _VARIANT_ARDUINO_ZERO_
 #error "This program will only run on an arduino (or genuino) zero. It could be made to also work on a DUE with some extra effort."
@@ -89,6 +90,7 @@
 #define SVC_SELFMOD_MARK    8 // Mark a line that has been modified
 #define SVC_SELFMOD_REACHED 9 // A line marked with SVC_SELFMOD_MARK has been reached.
 #define SVC_DIVIDE         10 // Divide R0 by R1, result in R0
+#define SVC_LOCATE_STACK   11 // Called once at the start of the program to find the stack pointer.
 
 LedControl screen=LedControl(12,11,10,1);
 
@@ -123,14 +125,21 @@ int runSpeed = C88_CONFIG_SPEED_FAST;
 
 int stopCode = 0;
 
+int inProgram = 0;
 
 uint32_t c88_reg = 0;
 uint32_t c88_io_reg = 0;
 
 int retranslate_required_from = -1;
 
-#define SUPERVISOR_DEBUG
-#define DEBUG_TRANSLATION
+uint32_t *translatedProgramStackPointer = 0;
+
+int screenIntensity = 4;
+
+int viewMode = VIEW_MEM;
+
+//#define SUPERVISOR_DEBUG
+//#define DEBUG_TRANSLATION
 
 // WARNING! The Arduino IDE does some nasty stuff with automatically adding forward declarations
 // for things. This seems to fall over spectacularly when there is a C++ function defined before
@@ -164,7 +173,7 @@ extern "C"{
       return;
     }
     if (svc_number == SVC_NUMBER(SVC_REGULATE_SPEED)){
-      
+      inProgram = 0;
       uint32_t R0 = svc_args[0];
       uint32_t R1 = svc_args[1];
       uint32_t R2 = svc_args[2];
@@ -284,7 +293,17 @@ extern "C"{
       uint32_t R0 = svc_args[0];
       uint32_t R1 = svc_args[1];
       svc_args[0] = R0 / R1;
+      return;
     }
+
+    if (svc_number == SVC_NUMBER(SVC_LOCATE_STACK)){
+      #ifdef SUPERVISOR_DEBUG
+      Serial.println("Supervisor: Locate stack pointer");
+      #endif
+      translatedProgramStackPointer = svc_args;
+      inProgram = 1;
+      return;
+    } 
   }
 }
 
@@ -356,14 +375,31 @@ uint32_t readIO(){
 }
 
 void updateScreen(){
-  for (int i = 0; i<= 7; i++){
-    screen.setRow(0,i, user_program[i]);
+
+  if (viewMode == VIEW_PC){
+    for (int i = 0; i<= 7; i++){
+      screen.setRow(0,i, 0);
+    }
+  }
+  
+  if (viewMode == VIEW_REG){
+    for (int i = 0; i<= 7; i++){
+      screen.setRow(0,i, c88_reg);
+    }
+  }
+
+  if (viewMode == VIEW_MEM){
+    for (int i = 0; i<= 7; i++){
+      screen.setRow(0,i, user_program[i]);
+    }
   }
 }
 
 void setup() {
   Serial.begin(115200);
   Serial.println("C88_DBT_Zero");
+
+  initInputs();
 
   // Test the supervisor, to make sure it works
   // If the build flow is changed slightly or a supervisor handler registered
@@ -377,7 +413,7 @@ void setup() {
   }
 
   translated_program = (uint16_t *)malloc(sizeof(uint16_t) * MAX_TRANSLATED_LENGTH);
-  runSpeed = C88_CONFIG_SPEED_FULL;
+  runSpeed = C88_CONFIG_SPEED_FAST;
   isRunning = false;
   /*
   user_program[0] = 0b00000111;
@@ -402,7 +438,7 @@ void setup() {
   user_program[7] = 0b01000101;
   */
 //Die
-/*
+
   user_program[0] = 0b11100000;
   user_program[1] = 0b00100101;
   user_program[2] = 0b00000110;
@@ -411,18 +447,17 @@ void setup() {
   user_program[5] = 0b00000111;
   user_program[6] = 0b00000001;
   user_program[7] = 0b00000000;
-  */
-
+/*
   user_program[0] = 0b01001111;
   user_program[1] = 0b00011000;
   user_program[7] = 0b00000001;
-  
+  */
   translate();
   showTranslatedProgram();
   
   isRunning = true;
 
-  screen.setIntensity(0,4);
+  screen.setIntensity(0,screenIntensity);
   screen.clearDisplay(0);
   screen.shutdown(0,false);
   updateScreen();
@@ -820,6 +855,7 @@ volatile void __attribute__ ((noinline)) call_translated_program(uint32_t R0in, 
     "  mov  r2, lr   \n" // r2 <= lr (return address for DBT)
     "  mov  r4, #1   \n" // r4 <= 1
     "  orr  r5, r4   \n" // r5 <= target | 1 (r5 is the target with the thumb bit set)
+    "  svc " SVC_STRING(SVC_LOCATE_STACK) "\n"
     "  blx  r5       \n" // A return from this call happens for stop instructions
                          // however, this code path may be skipped when returning to
                          // the DBT main loop. Is this a tail call? Maybe! This function
@@ -851,11 +887,12 @@ volatile void dbt_loop(){
     volatile uint16_t *target = (uint16_t*)((uint32_t)translated_program + translated_pc_offset);
     volatile uint8_t  *originalProgram = user_program;
     // This function will call the translated program after setting the registers
+    
     call_translated_program(R0, R1, target, originalProgram);
     //exit(1);
     asm("":::"r2", "r3", "r4", "r5");// does this work? if so why?
     // Now we need to extract the R0 value before anything else has a chance to
-    // clobber them. This is probably safe, as nothing should happen after the translated
+    // clobber it. This is probably safe, as nothing should happen after the translated
     // program returns before we do this.
     // This wastes a register, but it's the easiest way.
     asm(
@@ -866,6 +903,7 @@ volatile void dbt_loop(){
     // TODO, is the above doable by using the result of the function call?
   
     c88_reg = R0;
+    
   
     if (!isRunning){
       Serial.print("STOP instruction encountered, return code was: ");
@@ -895,7 +933,72 @@ volatile void dbt_loop(){
   
 }
 
-void loop() {
-  dbt_loop();
-  updateScreen();
+long lastBrightnessChange = millis();
+
+void handleBrightness(){
+  if ((lastBrightnessChange + 50) > millis()){return;}
+  int intensityChange = getBrightnessChange();
+  if (intensityChange != 0){
+    lastBrightnessChange = millis();
+    screenIntensity += intensityChange;
+    screenIntensity = min(16, max(0, screenIntensity));
+    screen.setIntensity(0,screenIntensity);
+  }
 }
+
+void updateClockSpeed(){
+  int clockMode = getClockMode();
+  if (clockMode == CLOCK_INPUT_SLOW){ runSpeed = C88_CONFIG_SPEED_SLOW; }
+  if (clockMode == CLOCK_INPUT_FAST){ runSpeed = C88_CONFIG_SPEED_FAST; }
+  if (clockMode == CLOCK_INPUT_FULL){ runSpeed = C88_CONFIG_SPEED_FULL; }
+}
+
+void updateViewMode(){
+  viewMode = getViewMode();
+}
+
+void handleReset(){
+  
+}
+
+void handleMemWrites(){
+  
+}
+
+void handleInputs(){
+  handleBrightness();
+  updateClockSpeed();
+  updateViewMode();
+  handleReset();
+  handleMemWrites();
+}
+
+void loop() {
+
+  if (!powerIsOn()){
+    screen.clearDisplay(0);
+    return;
+  }
+
+  handleInputs();
+  
+  dbt_loop();
+  //Serial.println("Run interrupted");
+  updateScreen();
+  debugInputs();
+}
+/*
+int sysTickHook(){
+  if (inProgram){
+    // If this flag is set, we need to bail out of the program
+    int inProgram = 0;
+    if (translatedProgramStackPointer != 0){
+      translated_pc_offset = (translatedProgramStackPointer[6] - (uint32_t)translated_program);
+      translatedProgramStackPointer[6] = translatedProgramStackPointer[2];
+    }
+  }
+  return 0;
+}
+
+*/
+
