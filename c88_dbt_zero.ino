@@ -140,6 +140,8 @@ int viewMode = VIEW_MEM;
 
 int FAULT_ICON[8] = {0xff, 0xc3, 0xa5, 0x99, 0x99, 0xa5, 0xc3, 0xff};
 
+boolean shouldStep = false;
+
 //#define SUPERVISOR_DEBUG
 //#define DEBUG_TRANSLATION
 
@@ -193,6 +195,11 @@ extern "C"{
       // This is a horrible hack!
       // This overwrites the return address the stack frame of the function that called the supervisor.
       svc_args[6] = R2;
+
+      if (shouldStep){
+        shouldStep = false;
+        isRunning = false;
+      }
       
       return;
       exit(1);
@@ -944,8 +951,19 @@ void updateViewMode(){
   viewMode = getViewMode();
 }
 
+boolean prevStep = false;
+
 void handleRunAndReset(){
-  isRunning = isRunOn();
+
+  if (isStepHeld() != prevStep){
+    prevStep = isStepHeld();
+    if (prevStep){
+      shouldStep = true;
+      isRunning = true;
+    }
+  }
+  
+  isRunning = isRunning || isRunOn();
   if (isInReset()){
     // When held in reset, don't run, clear the register and PC.
     isRunning = false;
