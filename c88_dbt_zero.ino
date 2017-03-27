@@ -142,8 +142,10 @@ int FAULT_ICON[8] = {0xff, 0xc3, 0xa5, 0x99, 0x99, 0xa5, 0xc3, 0xff};
 
 boolean shouldStep = false;
 
-//#define SUPERVISOR_DEBUG
-//#define DEBUG_TRANSLATION
+bool donesetup = false;
+
+#define SUPERVISOR_DEBUG
+#define DEBUG_TRANSLATION
 
 // WARNING! The Arduino IDE does some nasty stuff with automatically adding forward declarations
 // for things. This seems to fall over spectacularly when there is a C++ function defined before
@@ -310,7 +312,9 @@ extern "C"{
       Serial.println("Supervisor: Locate stack pointer");
       #endif
       translatedProgramStackPointer = svc_args;
-      inProgram = 1;
+      if (runSpeed == C88_CONFIG_SPEED_FULL){
+        inProgram = 1;
+      }
       return;
     } 
   }
@@ -443,11 +447,11 @@ void setup() {
   screen.clearDisplay(0);
   screen.shutdown(0,false);
   updateScreen();
+
+  donesetup = true;
 }
 
-// TODO this function doesn't work
 int calculateC88PC(int offset){
-  return 0; // For now return 0, so it's more obvious that the PC display is wrong
   for (int i = 0; i<= 7; i++){
     if (offset == thumb_offsets[i]){
       return i;
@@ -456,7 +460,7 @@ int calculateC88PC(int offset){
       return i-1;
     }
   }
-  return -1;
+  return 0;
 }
 
 uint16_t encode_thumb_16(THUMB16_t instruction, ...){
@@ -898,7 +902,8 @@ volatile void dbt_loop(){
   
     c88_reg = R0;
     
-  
+    Serial.println("Program interrupted");
+    Serial.print("New register value: 0x"); Serial.println(c88_reg);
     if (!isRunning){
       Serial.print("STOP instruction encountered, return code was: ");
       Serial.println(stopCode);
@@ -940,11 +945,22 @@ void handleBrightness(){
   }
 }
 
+void reset(){
+  isRunning = false;
+  c88_reg = 0;
+  translated_pc_offset = 0;
+}
+
 void updateClockSpeed(){
+  int oldRunSpeed = runSpeed;
   int clockMode = getClockMode();
   if (clockMode == CLOCK_INPUT_SLOW){ runSpeed = C88_CONFIG_SPEED_SLOW; }
   if (clockMode == CLOCK_INPUT_FAST){ runSpeed = C88_CONFIG_SPEED_FAST; }
   if (clockMode == CLOCK_INPUT_FULL){ runSpeed = C88_CONFIG_SPEED_FULL; }
+  if ((oldRunSpeed != runSpeed) &&(oldRunSpeed == C88_CONFIG_SPEED_FULL || runSpeed == C88_CONFIG_SPEED_FULL)){
+    translate();
+    reset();
+  }
 }
 
 void updateViewMode(){
@@ -954,7 +970,7 @@ void updateViewMode(){
 boolean prevStep = false;
 
 void handleRunAndReset(){
-
+  isRunning = false;
   if (isStepHeld() != prevStep){
     prevStep = isStepHeld();
     if (prevStep){
@@ -962,13 +978,12 @@ void handleRunAndReset(){
       isRunning = true;
     }
   }
-  
-  isRunning = isRunning || isRunOn();
+  if (!isRunning){
+    isRunning = isRunOn();
+  }
   if (isInReset()){
     // When held in reset, don't run, clear the register and PC.
-    isRunning = false;
-    c88_reg = 0;
-    translated_pc_offset = 0;
+    reset();
   }
   if (isInUserMode()){
     isRunning = false;
@@ -1013,18 +1028,22 @@ void loop() {
   updateScreen();
   //debugInputs();
 }
-/*
+
 int sysTickHook(){
-  if (inProgram){
-    // If this flag is set, we need to bail out of the program
-    int inProgram = 0;
-    if (translatedProgramStackPointer != 0){
-      translated_pc_offset = (translatedProgramStackPointer[6] - (uint32_t)translated_program);
-      translatedProgramStackPointer[6] = translatedProgramStackPointer[2];
+  noInterrupts();
+  if (donesetup){
+    if (inProgram){
+      Serial.println("Program needs interrupting.");
+      // If this flag is set, we need to bail out of the program
+      inProgram = 0;
+      if (translatedProgramStackPointer != 0){
+        translated_pc_offset = (translatedProgramStackPointer[6] - (uint32_t)translated_program);
+        translatedProgramStackPointer[6] = translatedProgramStackPointer[2];
+      }
     }
   }
+  interrupts();
   return 0;
 }
 
-*/
 
