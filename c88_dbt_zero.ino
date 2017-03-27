@@ -138,6 +138,8 @@ int screenIntensity = 4;
 
 int viewMode = VIEW_MEM;
 
+int FAULT_ICON[8] = {0xff, 0xc3, 0xa5, 0x99, 0x99, 0xa5, 0xc3, 0xff};
+
 //#define SUPERVISOR_DEBUG
 //#define DEBUG_TRANSLATION
 
@@ -349,6 +351,10 @@ extern "C"{
     Serial.print("= Exception on instruction with encoding 0x"); Serial.print(*((uint16_t *)fault_stack[6]), HEX);
     Serial.print(" at location 0x"); Serial.print(fault_stack[6], HEX);
 
+    for (int i = 0; i<= 7; i++){
+      screen.setRow(0,i, FAULT_ICON[i]);
+    }
+
     exit(1);
   }
 }
@@ -378,7 +384,7 @@ void updateScreen(){
 
   if (viewMode == VIEW_PC){
     for (int i = 0; i<= 7; i++){
-      screen.setRow(0,i, 0);
+      screen.setRow(0,i, calculateC88PC(translated_pc_offset));
     }
   }
   
@@ -415,43 +421,12 @@ void setup() {
   translated_program = (uint16_t *)malloc(sizeof(uint16_t) * MAX_TRANSLATED_LENGTH);
   runSpeed = C88_CONFIG_SPEED_FAST;
   isRunning = false;
-  /*
-  user_program[0] = 0b00000111;
-  user_program[1] = 0b10001110;
-  user_program[2] = 0b01000000;
-  user_program[3] = 0b00000000;
-  user_program[4] = 0b00000000;
-  user_program[5] = 0b00000000;
-  user_program[6] = 0b00000011;
-  user_program[7] = 0b00000010;
-  */
 
- //CYLON
- /*
-  user_program[0] = 0b01000001;
-  user_program[1] = 0b00000001;
-  user_program[2] = 0b10100001;
-  user_program[3] = 0b00101000;
-  user_program[4] = 0b01000010;
-  user_program[5] = 0b10101001;
-  user_program[6] = 0b00110001;
-  user_program[7] = 0b01000101;
-  */
-//Die
-
-  user_program[0] = 0b11100000;
-  user_program[1] = 0b00100101;
-  user_program[2] = 0b00000110;
-  user_program[3] = 0b00010111;
-  user_program[4] = 0b01000000;
-  user_program[5] = 0b00000111;
-  user_program[6] = 0b00000001;
-  user_program[7] = 0b00000000;
-/*
-  user_program[0] = 0b01001111;
-  user_program[1] = 0b00011000;
-  user_program[7] = 0b00000001;
-  */
+  // Start with blank program
+  for (int i = 0; i<= 7; i++){
+    user_program[i] = 0x0;
+  }
+  
   translate();
   showTranslatedProgram();
   
@@ -461,6 +436,20 @@ void setup() {
   screen.clearDisplay(0);
   screen.shutdown(0,false);
   updateScreen();
+}
+
+// TODO this function doesn't work
+int calculateC88PC(int offset){
+  return 0; // For now return 0, so it's more obvious that the PC display is wrong
+  for (int i = 0; i<= 7; i++){
+    if (offset == thumb_offsets[i]){
+      return i;
+    }
+    if (offset < thumb_offsets[i]){
+      return i-1;
+    }
+  }
+  return -1;
 }
 
 uint16_t encode_thumb_16(THUMB16_t instruction, ...){
@@ -757,7 +746,7 @@ void translate_from(int start){
 
   // Insert a jump at the end of the program, to get back to the start. To simulate the wrap-around behaviour.
   int targetOffset = thumb_offsets[0]; // Should always be zero
-  int relativeJump = targetOffset - curThumbOffset;
+  int relativeJump = (targetOffset - curThumbOffset)>>1;
   translateDebug("--B(loop to zero)");
   thumb_asm(encode_thumb_16(THUMB_B_2, relativeJump)); // PC <= PC + relativeJump
 
@@ -821,7 +810,6 @@ void translate_from(int start){
 
 }
 
-
 void translate(){
   // Full retranslation.
   // Set the base offset to 0
@@ -831,7 +819,7 @@ void translate(){
 
 void showTranslatedProgram(){
   #ifdef DEBUG_TRANSLATION
-  for (int i = 0; i<= 14; i++){
+  for (int i = 0; i<= 99; i++){
     Serial.print("0x");
     Serial.print((uint32_t)(translated_program + i), HEX);
     Serial.print(": 0x");
@@ -887,7 +875,6 @@ volatile void dbt_loop(){
     volatile uint16_t *target = (uint16_t*)((uint32_t)translated_program + translated_pc_offset);
     volatile uint8_t  *originalProgram = user_program;
     // This function will call the translated program after setting the registers
-    
     call_translated_program(R0, R1, target, originalProgram);
     //exit(1);
     asm("":::"r2", "r3", "r4", "r5");// does this work? if so why?
@@ -957,35 +944,56 @@ void updateViewMode(){
   viewMode = getViewMode();
 }
 
-void handleReset(){
-  
+void handleRunAndReset(){
+  isRunning = isRunOn();
+  if (isInReset()){
+    // When held in reset, don't run, clear the register and PC.
+    isRunning = false;
+    c88_reg = 0;
+    translated_pc_offset = 0;
+  }
+  if (isInUserMode()){
+    isRunning = false;
+  }
 }
 
 void handleMemWrites(){
-  
+  if (isInUserMode()){
+    // Poll the user input switches to check if we need to write to memory
+    if (isWriteEnabled()){
+      // Get the address
+      uint32_t addr = getAddrInput(); 
+      // Modify the program
+      user_program[addr] = getDataInput();
+      // Call the supervisor to notify it about the modified instruction.
+      asm(
+        "mov r1, %[modifiedAddress] \n\t"
+        "svc " SVC_STRING(SVC_SELFMOD_MARK) "\n\t"
+        : 
+        : [modifiedAddress] "r" (addr)
+        : "r1"
+      );
+    }
+  }
 }
 
 void handleInputs(){
   handleBrightness();
   updateClockSpeed();
   updateViewMode();
-  handleReset();
+  handleRunAndReset();
   handleMemWrites();
 }
 
 void loop() {
-
   if (!powerIsOn()){
     screen.clearDisplay(0);
     return;
   }
-
   handleInputs();
-  
   dbt_loop();
-  //Serial.println("Run interrupted");
   updateScreen();
-  debugInputs();
+  //debugInputs();
 }
 /*
 int sysTickHook(){

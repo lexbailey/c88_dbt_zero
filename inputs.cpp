@@ -1,5 +1,7 @@
 #include "inputs.h"
 
+Adafruit_MCP23017 ioExpander;
+
 void initInputs(){
   pinMode(SWITCH_POWER, INPUT);
   pinMode(SWITCH_BRIGHT_INC, INPUT);
@@ -12,6 +14,36 @@ void initInputs(){
   pinMode(SWITCH_RESET, INPUT);
   pinMode(SWITCH_STEP, INPUT);
   pinMode(SWITCH_RUN, INPUT);
+
+  // The data and address pins are on the IO expander, so it the write switch
+  ioExpander.begin();
+
+  // Because the Adafruit library hides the writeRegister function (it's private)
+  // we can't configure the io expander in two transmissions
+  //ioExpander.writeRegister(MCP23017_GPPUA, 0x00);
+  //ioExpander.writeRegister(MCP23017_GPPUB, 0x00);
+
+  // Instead we have to do 16 transitions. Urgh!
+  for (int i = 0; i<= 15; i++){
+    ioExpander.pullUp(i,1);
+  }
+}
+
+bool isWriteEnabled(){
+  return ioExpander.readGPIO(0) & 0x10;
+}
+
+int getDataInput(){
+  return ioExpander.readGPIO(1);  
+}
+
+int getAddrInput(){
+  int rawInput = ioExpander.readGPIO(0);
+  // Hmph! I got the wiring backwards.
+  return 
+  ((rawInput & 128)>>7)|
+  ((rawInput &  64)>>5)|
+  ((rawInput &  32)>>3);
 }
 
 bool powerIsOn(){
@@ -53,36 +85,48 @@ bool isRunOn(){
 }
 
 void debugInputs(){
-  Serial.print("Power: ");
+  Serial.print("Pwr:");
   Serial.print(powerIsOn());
   Serial.print(" | ");
 
-  Serial.print("Bright: ");
+  Serial.print("Brt:");
   Serial.print(getBrightnessChange());
   Serial.print(" | ");
 
-  Serial.print("View: ");
+  Serial.print("View:");
   Serial.print(getViewMode());
   Serial.print(" | ");
 
-  Serial.print("Clock: ");
+  Serial.print("Clk:");
   Serial.print(getClockMode());
   Serial.print(" | ");
 
-  Serial.print("User: ");
+  Serial.print("Usr:");
   Serial.print(isInUserMode());
   Serial.print(" | ");
 
-  Serial.print("Reset: ");
+  Serial.print("Rst:");
   Serial.print(isInReset());
   Serial.print(" | ");
 
-  Serial.print("Step: ");
+  Serial.print("Stp:");
   Serial.print(isStepHeld());
   Serial.print(" | ");
 
-  Serial.print("Run: ");
+  Serial.print("Run:");
   Serial.print(isRunOn());
+  Serial.print(" | ");
+
+  Serial.print("Wrt:");
+  Serial.print(isWriteEnabled());
+  Serial.print(" | ");
+
+  Serial.print("Addr:");
+  Serial.print(getAddrInput());
+  Serial.print(" | ");
+
+  Serial.print("Data:");
+  Serial.print(getDataInput());
   Serial.println("");
 }
 

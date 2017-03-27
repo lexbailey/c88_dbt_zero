@@ -1,4 +1,8 @@
+#ifndef INPUTS_INCLUDE
+#define INPUTS_INCLUDE
+
 #include <Arduino.h>
+#include <Adafruit_MCP23017.h>
 
 #define SWITCH_POWER (2)
 #define SWITCH_BRIGHT_INC (4)
@@ -22,6 +26,12 @@
 
 void initInputs();
 
+bool isWriteEnabled();
+
+int getDataInput();
+
+int getAddrInput();
+
 bool powerIsOn();
 
 int getBrightnessChange();
@@ -39,3 +49,5 @@ bool isStepHeld();
 bool isRunOn();
 
 void debugInputs();
+
+#endif /* INPUTS_INCLUDE */
