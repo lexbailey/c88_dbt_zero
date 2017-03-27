@@ -144,8 +144,8 @@ boolean shouldStep = false;
 
 bool donesetup = false;
 
-#define SUPERVISOR_DEBUG
-#define DEBUG_TRANSLATION
+//#define SUPERVISOR_DEBUG
+//#define DEBUG_TRANSLATION
 
 // WARNING! The Arduino IDE does some nasty stuff with automatically adding forward declarations
 // for things. This seems to fall over spectacularly when there is a C++ function defined before
@@ -902,8 +902,6 @@ volatile void dbt_loop(){
   
     c88_reg = R0;
     
-    Serial.println("Program interrupted");
-    Serial.print("New register value: 0x"); Serial.println(c88_reg);
     if (!isRunning){
       Serial.print("STOP instruction encountered, return code was: ");
       Serial.println(stopCode);
@@ -1029,11 +1027,16 @@ void loop() {
   //debugInputs();
 }
 
+int tickCount = 0;
+
 int sysTickHook(){
+  // To prevent starvation of the translated program 
+  // only interrupt after every 100 systick ticks.
+  if (++tickCount < 99){ return 0; }
+  tickCount = 0;
   noInterrupts();
   if (donesetup){
     if (inProgram){
-      Serial.println("Program needs interrupting.");
       // If this flag is set, we need to bail out of the program
       inProgram = 0;
       if (translatedProgramStackPointer != 0){
